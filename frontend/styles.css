@@ -1,0 +1,102 @@
+body {
+  margin: 0;
+  background: #e7e9e3;
+  color: #191e1c;
+  font-family: system-ui, sans-serif;
+  line-height: 1.55;
+}
+
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px 60px;
+}
+
+h1 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 20px;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+}
+
+.composer input {
+  flex: 1;
+  padding: 10px 12px;
+  font: inherit;
+  background: #f3f4ef;
+  border: 1px solid #cbcec5;
+  border-radius: 3px;
+}
+
+.composer button {
+  padding: 10px 18px;
+  font: inherit;
+  color: #f3f4ef;
+  background: #191e1c;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.note,
+.error {
+  font-size: 0.88rem;
+  color: #6b736d;
+}
+
+.error {
+  color: #97331f;
+}
+
+.turn {
+  margin-top: 32px;
+}
+
+.question {
+  margin: 0 0 12px;
+  padding-left: 12px;
+  border-left: 2px solid #191e1c;
+  font-weight: 500;
+}
+
+.search {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: #f3f4ef;
+  border: 1px solid #cbcec5;
+  border-radius: 3px;
+  font-size: 0.88rem;
+}
+
+.search summary {
+  cursor: pointer;
+  color: #6b736d;
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  margin: 10px 0 0;
+}
+
+.result a {
+  color: #191e1c;
+}
+
+.result span {
+  color: #6b736d;
+  font-size: 0.84rem;
+}
+
+.answer {
+  white-space: pre-wrap;
+}
