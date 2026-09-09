@@ -12,6 +12,7 @@ import httpx
 from ddgs import DDGS
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -84,21 +85,22 @@ async def ask_ollama(client: httpx.AsyncClient, messages: list[dict], tools: lis
     return response.json()["message"]
 
 
-@app.post("/api/chat")
-async def chat(request: ChatRequest) -> dict:
+async def run_agent(question: str):
+    """Yield one event per step so the browser can show progress as it happens."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": request.message},
+        {"role": "user", "content": question},
     ]
-    searches = []
 
     async with httpx.AsyncClient() as client:
         for _ in range(MAX_ITERATIONS):
+            yield {"type": "thinking"}
             message = await ask_ollama(client, messages, TOOLS)
             calls = message.get("tool_calls") or []
 
             if not calls:
-                return {"answer": message.get("content", ""), "searches": searches}
+                yield {"type": "answer", "answer": message.get("content", "")}
+                return
 
             messages.append(message)
             for call in calls:
@@ -107,20 +109,36 @@ async def chat(request: ChatRequest) -> dict:
                     arguments = json.loads(arguments)
                 query = arguments.get("query", "")
 
+                yield {"type": "search_start", "query": query}
                 started = time.perf_counter()
                 results = await asyncio.to_thread(search_blocking, query)
-                searches.append(
-                    {
-                        "query": query,
-                        "ms": round((time.perf_counter() - started) * 1000),
-                        "results": results,
-                    }
-                )
+                yield {
+                    "type": "search_done",
+                    "query": query,
+                    "ms": round((time.perf_counter() - started) * 1000),
+                    "results": results,
+                }
                 messages.append({"role": "tool", "content": json.dumps(results)})
 
         # Tool budget spent: ask for a final answer with tools switched off.
+        yield {"type": "thinking"}
         message = await ask_ollama(client, messages)
-        return {"answer": message.get("content", ""), "searches": searches}
+        yield {"type": "answer", "answer": message.get("content", "")}
+
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest) -> StreamingResponse:
+    """Newline-delimited JSON: one event per line, flushed as the agent produces it."""
+
+    async def lines():
+        try:
+            async for event in run_agent(request.message):
+                yield json.dumps(event) + "\n"
+        except Exception as exc:
+            # Headers are already sent, so a 500 is no longer possible: report in-band.
+            yield json.dumps({"type": "error", "error": str(exc)}) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
 @app.get("/api/health")
