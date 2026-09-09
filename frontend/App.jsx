@@ -4,6 +4,7 @@ import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
+import { historyOf, hostOf } from "@/lib/history";
 import { HealthStrip } from "@/components/health-strip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,15 +76,6 @@ const droppedOf = (turn) =>
     }),
     { duplicates: 0, dead: 0 },
   );
-
-/** DuckDuckGo occasionally returns something URL() will not parse. */
-const hostOf = (url) => {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-};
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
@@ -284,7 +276,7 @@ export default function App() {
     <div className="mx-auto flex h-dvh max-w-3xl flex-col gap-3 px-4 pb-4">
       <header className="flex items-start justify-between gap-4 border-b py-3">
         <h1 className="text-sm font-semibold">Local search agent</h1>
-        <HealthStrip api={API} />
+        <HealthStrip api={API} history={historyOf(turns)} />
       </header>
 
       <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollPreviousItemPeek={64}>
