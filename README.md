@@ -201,6 +201,11 @@ and timing. Under the answer, `sourcesOf` lists every URL the model saw, dedupli
 which is the citation list — independent of whether the model remembered to cite anything
 itself.
 
+The answer itself is markdown, so it goes through `react-markdown` rather than into a
+`<pre>`: headings, lists and tables render, and `remark-gfm` turns the bare URLs the
+model cites into links. No rehype plugin re-enables raw HTML, so nothing an answer
+carries out of a search result can inject markup into the page.
+
 Watch the raw stream from the terminal:
 
 ```powershell
