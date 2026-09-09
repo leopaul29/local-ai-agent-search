@@ -11,6 +11,7 @@ import time
 from collections import Counter
 
 import httpx
+from lxml import html as lxml_html
 from ddgs import DDGS
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +25,12 @@ MAX_ITERATIONS = 3
 # seconds two runs in five were cut off mid-answer and surfaced as a bare timeout.
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "600"))
 LINK_TIMEOUT = 6.0
+# The page is downloaded to check it and to read its headings, so the budget is bigger
+# than a HEAD needed and capped: some of these pages are 300 KB of markup.
+PAGE_BYTES = 400_000
+MAX_HEADINGS = 12
+HEADINGS_CHARS = 600
+NOISE = "//script|//style|//nav|//footer|//header|//aside|//form|//noscript"
 # Short: the page polls /api/health on a timer, and a hung probe is a down service as
 # far as the person watching the status strip is concerned.
 HEALTH_TIMEOUT = 4.0
@@ -104,23 +111,62 @@ def normalize(url: str) -> str:
     return url.rstrip("/.,;:*`_").lower()
 
 
-async def check_alive(client: httpx.AsyncClient, url: str) -> int | None:
-    """Return the status code the URL answers with, or None when it cannot be reached.
+def page_headings(markup: str) -> str:
+    """The h1, h2 and h3 of a page's main content, in order, as one line.
 
-    HEAD first, because it costs one round trip and no body. Sites that reject the method
-    with 405 are retried with a streamed GET that is abandoned as soon as the status line
-    arrives.
+    On a listicle — which is what a "best X in Y" search returns — the headings are the
+    list: the restaurant names, one per section. The search snippet is the site's own
+    blurb and usually names none of them, so this is where the answer's facts live.
+    Everything else on the page is left alone; the point is a few hundred characters that
+    a small model can actually hold, not the page.
     """
-    for method in ("HEAD", "GET"):
-        try:
-            async with client.stream(
-                method, url, timeout=LINK_TIMEOUT, follow_redirects=True
-            ) as response:
-                if response.status_code != 405:
-                    return response.status_code
-        except Exception:
-            return None
-    return None
+    try:
+        tree = lxml_html.fromstring(markup)
+    except Exception:
+        return ""
+
+    for node in tree.xpath(NOISE):
+        node.getparent().remove(node)
+
+    # Chrome and sidebar headings live outside the article, so prefer it when it exists.
+    body = tree.xpath("//main|//article") or [tree]
+    seen, out = set(), []
+    for section in body:
+        for heading in section.xpath(".//h1|.//h2|.//h3"):
+            text = " ".join(heading.text_content().split())
+            if 3 < len(text) < 200 and text not in seen:
+                seen.add(text)
+                out.append(text)
+    return " | ".join(out[:MAX_HEADINGS])[:HEADINGS_CHARS]
+
+
+async def fetch_page(client: httpx.AsyncClient, url: str) -> tuple[int | None, str]:
+    """Status code and headings for a URL, or (None, "") when it cannot be reached.
+
+    One streamed GET does both jobs: the status line says whether the link is alive, and
+    the body, read up to PAGE_BYTES and no further, says what the page is about. HEAD
+    would be cheaper but answers only the first question, and a partial document parses
+    well enough for headings.
+    """
+    try:
+        async with client.stream(
+            "GET", url, timeout=LINK_TIMEOUT, follow_redirects=True
+        ) as response:
+            if response.status_code >= 400:
+                return response.status_code, ""
+            if "html" not in response.headers.get("content-type", ""):
+                return response.status_code, ""
+
+            chunks, total = [], 0
+            async for chunk in response.aiter_bytes():
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= PAGE_BYTES:
+                    break
+            markup = b"".join(chunks).decode(response.encoding or "utf-8", "replace")
+            return response.status_code, page_headings(markup)
+    except Exception:
+        return None, ""
 
 
 def is_dead(status: int | None) -> bool:
@@ -308,15 +354,18 @@ async def run_agent(question: str):
                 for row in rows:
                     key = normalize(row["url"])
                     if row["url"] and key not in retrieved:
-                        retrieved[key] = f"{row['title']} {row['snippet']}"
                         fresh.append(row)
 
-                statuses = await asyncio.gather(
-                    *(check_alive(client, row["url"]) for row in fresh)
+                fetched = await asyncio.gather(
+                    *(fetch_page(client, row["url"]) for row in fresh)
                 )
-                for row, status in zip(fresh, statuses):
+                for row, (status, headings) in zip(fresh, fetched):
                     row["status"] = status
                     row["dead"] = is_dead(status)
+                    row["headings"] = headings
+                    # The corpus the three answer checks are judged against: whatever the
+                    # model was shown, no more.
+                    retrieved[normalize(row["url"])] = f"{row['title']} {row['snippet']} {headings}"
 
                 alive = [row for row in fresh if not row["dead"]]
                 yield {
@@ -335,7 +384,11 @@ async def run_agent(question: str):
                         "role": "tool",
                         "content": json.dumps(
                             [
-                                {key: row[key] for key in ("title", "url", "snippet")}
+                                {
+                                    key: row[key]
+                                    for key in ("title", "url", "snippet", "headings")
+                                    if row[key]
+                                }
                                 for row in alive
                             ]
                         ),
