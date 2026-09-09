@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node test-health.mjs"
+    "test": "node test-health.mjs && node test-history.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
