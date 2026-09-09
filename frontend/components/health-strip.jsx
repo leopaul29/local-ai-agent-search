@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "cn";
+import { SearchIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { SERVICES, transitions } from "@/lib/health";
@@ -52,13 +53,11 @@ const dotClass = (up) =>
       ? "bg-destructive animate-pulse"
       : "bg-muted-foreground/40";
 
-/** The state of the chip, then every page the searches turned up this session. */
-function SessionLog({ detail, history }) {
+/** Every page the searches turned up this session. */
+function SessionLog({ history }) {
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs text-muted-foreground">SearXNG: {detail ?? WAITING}</p>
-
-      <div className="flex flex-col gap-1 border-t pt-2">
+      <div className="flex flex-col gap-1">
         <p className="text-xs font-medium">
           {history.length === 0
             ? "No page seen yet this session"
@@ -89,10 +88,9 @@ function SessionLog({ detail, history }) {
         </ul>
       </div>
 
-      {/* Worth saying on the chip that shows them: these did not come from SearXNG. */}
       <p className="border-t pt-2 text-[0.7rem] text-muted-foreground">
-        Returned by DuckDuckGo through <code>ddgs</code>. Nothing calls SearXNG yet, so this chip
-        only reports whether the container is up.
+        Returned by <code>ddgs</code>, which rotates over Brave, DuckDuckGo, Google, Mojeek,
+        Startpage, Wikipedia and Yahoo. Resets when the page reloads.
       </p>
     </div>
   );
@@ -146,32 +144,32 @@ export function HealthStrip({ api, history = [] }) {
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex flex-wrap items-center gap-1.5">
-        {SERVICES.map(({ key, label }) => {
-          // The search chip opens the session log on hover; the other two say their state in
-          // a native tooltip, which the card would only sit on top of.
-          const opensLog = key === "searxng";
-          const chip = (
-            <Badge
-              variant={health[key]?.up === false ? "destructive" : "outline"}
-              title={opensLog ? undefined : (health[key]?.detail ?? WAITING)}
-              className="gap-1.5 font-normal"
-            >
-              <span className={cn("size-1.5 rounded-full", dotClass(health[key]?.up))} />
-              {label}
-            </Badge>
-          );
+        {SERVICES.map(({ key, label }) => (
+          <Badge
+            key={key}
+            variant={health[key]?.up === false ? "destructive" : "outline"}
+            title={health[key]?.detail ?? WAITING}
+            className="gap-1.5 font-normal"
+          >
+            <span className={cn("size-1.5 rounded-full", dotClass(health[key]?.up))} />
+            {label}
+          </Badge>
+        ))}
 
-          return opensLog ? (
-            <HoverCard key={key}>
-              <HoverCardTrigger render={<span className="cursor-default" />}>{chip}</HoverCardTrigger>
-              <HoverCardContent align="end" className="w-80">
-                <SessionLog detail={health[key]?.detail} history={history} />
-              </HoverCardContent>
-            </HoverCard>
-          ) : (
-            <Fragment key={key}>{chip}</Fragment>
-          );
-        })}
+        {/* Not a probe: ddgs runs inside the backend, so there is nothing separate to be up
+            or down. The count sits here because this is where you look to see what the
+            searches did. */}
+        <HoverCard>
+          <HoverCardTrigger render={<span className="cursor-default" />}>
+            <Badge variant="outline" className="gap-1.5 font-normal" title="Pages seen this session">
+              <SearchIcon className="size-3" />
+              {history.length}
+            </Badge>
+          </HoverCardTrigger>
+          <HoverCardContent align="end" className="w-80">
+            <SessionLog history={history} />
+          </HoverCardContent>
+        </HoverCard>
       </div>
 
       {/* Spelled out as well as coloured: the point is to see which one broke without hovering. */}

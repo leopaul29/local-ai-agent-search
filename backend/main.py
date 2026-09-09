@@ -19,7 +19,6 @@ from pydantic import BaseModel
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
-SEARXNG_HOST = os.getenv("SEARXNG_HOST", "http://localhost:8080")
 MAX_ITERATIONS = 3
 # Generous: qwen3:1.7b answering from five snippets runs mostly on the CPU, and at 180
 # seconds two runs in five were cut off mid-answer and surfaced as a bare timeout.
@@ -186,24 +185,20 @@ def unsupported_citations(answer: str, sources: dict[str, str]) -> list[dict]:
     return gaps
 
 
-def model_pulled(response: httpx.Response) -> str:
-    """A reachable Ollama that has never pulled OLLAMA_MODEL still cannot answer.
+async def check_ollama(client: httpx.AsyncClient) -> dict:
+    """Reach Ollama and, when it cannot answer, say why in terms worth showing.
 
-    Raising here reports it through the same path as a connection failure, with the
-    command that fixes it.
+    A server that answers but has never pulled OLLAMA_MODEL counts as down — it cannot
+    answer a question either — so it is raised like any other failure and comes back
+    carrying the command that fixes it.
     """
-    names = [model.get("name") for model in response.json().get("models", [])]
-    if OLLAMA_MODEL not in names:
-        raise RuntimeError(f"not pulled — run: ollama pull {OLLAMA_MODEL}")
-    return OLLAMA_MODEL
-
-
-async def probe(client: httpx.AsyncClient, url: str, check=None) -> dict:
-    """Reach one service and say what went wrong when it does not answer."""
     try:
-        response = await client.get(url, timeout=HEALTH_TIMEOUT)
+        response = await client.get(f"{OLLAMA_HOST}/api/tags", timeout=HEALTH_TIMEOUT)
         response.raise_for_status()
-        return {"up": True, "detail": check(response) if check else "responding"}
+        names = [model.get("name") for model in response.json().get("models", [])]
+        if OLLAMA_MODEL not in names:
+            raise RuntimeError(f"not pulled — run: ollama pull {OLLAMA_MODEL}")
+        return {"up": True, "detail": OLLAMA_MODEL}
     except Exception as exc:
         return {"up": False, "detail": str(exc) or exc.__class__.__name__}
 
@@ -331,17 +326,10 @@ async def chat(request: ChatRequest) -> StreamingResponse:
 
 @app.get("/api/health")
 async def health() -> dict:
-    """One probe per dependency, so a failure points at the service that caused it.
+    """Whether a question can be answered at all, and what is broken when it cannot.
 
-    Both are probed on every call rather than cached: the page polls this a few times a
-    minute and a stale "up" is worse than the two requests it saves.
+    Probed on every call rather than cached: the page polls this a few times a minute, and
+    a stale "up" is worse than the one request it saves.
     """
     async with httpx.AsyncClient() as client:
-        ollama, searxng = await asyncio.gather(
-            probe(client, f"{OLLAMA_HOST}/api/tags", model_pulled),
-            probe(client, f"{SEARXNG_HOST}/healthz"),
-        )
-    return {
-        "ollama": {**ollama, "url": OLLAMA_HOST},
-        "searxng": {**searxng, "url": SEARXNG_HOST},
-    }
+        return {"ollama": {**await check_ollama(client), "url": OLLAMA_HOST}}
