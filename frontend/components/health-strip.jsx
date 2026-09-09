@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { SERVICES, transitions } from "@/lib/health";
 import { hostOf } from "@/lib/history";
 import { Badge } from "@/components/ui/badge";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 
 const POLL_MS = 5000;
 const WAITING = "waiting for the first probe";
@@ -158,18 +157,23 @@ export function HealthStrip({ api, history = [] }) {
 
         {/* Not a probe: ddgs runs inside the backend, so there is nothing separate to be up
             or down. The count sits here because this is where you look to see what the
-            searches did. */}
-        <HoverCard>
-          <HoverCardTrigger render={<span className="cursor-default" />}>
-            <Badge variant="outline" className="gap-1.5 font-normal" title="Pages seen this session">
+            searches did. Click to open: the log is a list of links, and a card that closes
+            when the pointer leaves is a bad place to put links. */}
+        <details className="relative">
+          <summary className="list-none marker:content-none">
+            <Badge
+              variant="outline"
+              className="cursor-pointer gap-1.5 font-normal"
+              title="Pages seen this session"
+            >
               <SearchIcon className="size-3" />
               {history.length}
             </Badge>
-          </HoverCardTrigger>
-          <HoverCardContent align="end" className="w-80">
+          </summary>
+          <div className="absolute end-0 z-50 mt-1 w-80 rounded-lg bg-popover p-2.5 text-start text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10">
             <SessionLog history={history} />
-          </HoverCardContent>
-        </HoverCard>
+          </div>
+        </details>
       </div>
 
       {/* Spelled out as well as coloured: the point is to see which one broke without hovering. */}
