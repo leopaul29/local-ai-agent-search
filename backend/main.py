@@ -91,10 +91,10 @@ class ChatRequest(BaseModel):
     message: str
 
 
-def search_blocking(query: str, max_results: int = 5) -> list[dict]:
+def search_blocking(query: str) -> list[dict]:
     """ddgs is synchronous, so this runs in a worker thread."""
     with DDGS() as ddgs:
-        rows = list(ddgs.text(query, max_results=max_results))
+        rows = list(ddgs.text(query, max_results=5))
     return [
         {
             "title": row.get("title", ""),
@@ -167,12 +167,6 @@ async def fetch_page(client: httpx.AsyncClient, url: str) -> tuple[int | None, s
             return response.status_code, page_headings(markup)
     except Exception:
         return None, ""
-
-
-def is_dead(status: int | None) -> bool:
-    # ponytail: a slow site that misses LINK_TIMEOUT is indistinguishable from a gone one
-    # here. Split timeouts out from transport errors if good results start disappearing.
-    return status is None or status in DEAD_STATUSES
 
 
 def unretrieved_urls(answer: str, sources: dict[str, str]) -> list[str]:
@@ -323,21 +317,15 @@ async def run_agent(question: str):
     retrieved: dict[str, str] = {}
 
     async with httpx.AsyncClient() as client:
-        for _ in range(MAX_ITERATIONS):
+        # One extra pass with tools switched off: once the budget is spent the model has no
+        # way out but an answer, so every path leaves the loop with one in hand.
+        for step in range(MAX_ITERATIONS + 1):
             yield {"type": "thinking"}
-            message = await ask_ollama(client, messages, TOOLS)
+            message = await ask_ollama(client, messages, TOOLS if step < MAX_ITERATIONS else None)
             calls = message.get("tool_calls") or []
 
             if not calls:
-                answer = message.get("content", "")
-                yield {
-                    "type": "answer",
-                    "answer": answer,
-                    "unretrieved": unretrieved_urls(answer, retrieved),
-                    "unsupported": unsupported_citations(answer, retrieved),
-                    "ungrounded": ungrounded_names(answer, retrieved),
-                }
-                return
+                break
 
             messages.append(message)
             for call in calls:
@@ -361,7 +349,10 @@ async def run_agent(question: str):
                 )
                 for row, (status, headings) in zip(fresh, fetched):
                     row["status"] = status
-                    row["dead"] = is_dead(status)
+                    # ponytail: a slow site that misses LINK_TIMEOUT is indistinguishable from a
+                    # gone one. Split timeouts out from transport errors if good results
+                    # start disappearing.
+                    row["dead"] = status is None or status in DEAD_STATUSES
                     row["headings"] = headings
                     # The corpus the three answer checks are judged against: whatever the
                     # model was shown, no more.
@@ -395,9 +386,6 @@ async def run_agent(question: str):
                     }
                 )
 
-        # Tool budget spent: ask for a final answer with tools switched off.
-        yield {"type": "thinking"}
-        message = await ask_ollama(client, messages)
         answer = message.get("content", "")
         yield {
             "type": "answer",
