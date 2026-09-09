@@ -6,6 +6,7 @@ API keys.
 ## Layout
 
 ```
+ARCHITECTURE.md       component and request-flow diagrams, English then Japanese
 backend/main.py       the whole agent: /api/chat, /api/health, one web_search tool
 backend/test_stream.py  self-check for the event stream, no Ollama and no network
 backend/.env          OLLAMA_HOST, OLLAMA_MODEL, SEARXNG_HOST; gitignored, copy .env.example
@@ -13,12 +14,13 @@ backend/.env          OLLAMA_HOST, OLLAMA_MODEL, SEARXNG_HOST; gitignored, copy 
 frontend/App.jsx      the transcript, the composer, the stream reader
 frontend/components/health-strip.jsx  the up/down chips, the polling, the toast and the alarm
 frontend/lib/health.js  which up/down changes are worth announcing — the part with a test
-frontend/test-health.mjs  self-check for that, no React and no browser
+frontend/lib/history.js  the session URL log behind the SearXNG chip
+frontend/test-health.mjs, test-history.mjs  self-checks for both, no React and no browser
 frontend/components/ui/  shadcn components, generated; regenerate rather than edit
 frontend/main.jsx     mounts it; index.html is Vite's entry point
 agent.py              a multi-provider agent loop with none of its modules written
 __init__.py           the provider registry those modules would live in
-docker-compose.yml    SearXNG on :8080 — nothing calls it yet, so it is optional
+docker-compose.yml    SearXNG on :8080 — health-probed only; the search engine is ddgs
 ```
 
 Only `backend/` and `frontend/` run today. `agent.py` and `__init__.py` are a second
@@ -240,6 +242,14 @@ The strip shows three chips, because the backend is the thing that probes the ot
 With the backend red the other two go grey rather than red: their state is unknown, not
 down.
 
+Hovering the SearXNG chip opens the session log: every page a search returned since the
+tab was opened, most recently seen first, deduplicated across questions and struck
+through when the link checker found it dead. `historyOf` in `frontend/lib/history.js`
+builds it from the turns already in React state — nothing extra is stored, and it resets
+on reload. The card says so itself, but worth repeating: those URLs come from
+DuckDuckGo. The chip is on them because it is the search chip, not because SearXNG
+returned any of them.
+
 The page polls every 5 seconds and announces **changes only** — a toast plus a two-tone
 alarm when something that was up goes down, a quieter toast when it comes back. A service
 that was never up stays silent, which is what keeps the optional SearXNG container from
@@ -248,6 +258,39 @@ nagging on every load. `transitions()` in `frontend/lib/health.js` is that rule,
 
 Browsers refuse to start audio until the tab has been clicked or typed in, so the very
 first alarm on an untouched page is silent. The toast still appears.
+
+## What the model actually gets
+
+This is retrieval-augmented, but the retrieval is thinner than the phrase usually implies,
+and it is worth being exact about what reaches the model.
+
+A tool call comes back as a `role: "tool"` message appended to `messages`, and the next
+call to Ollama carries the whole conversation, so the results are in the context the answer
+is written from. That part is real. What is in them is five rows of *title, URL and the
+first 500 characters of the search-result snippet* — about 2.4 KB, roughly 600 tokens, per
+search. Nothing fetches a page. The model never reads a single one of the pages it cites.
+
+Whether it uses them is not a matter of opinion, it is testable. The same question asked
+with no search at all:
+
+```powershell
+.venv\Scripts\python.exe -c "import httpx; print(httpx.post('http://localhost:11434/api/chat', json={'model':'qwen3:1.7b','stream':False,'messages':[{'role':'user','content':'best gyoza restaurants in Shinjuku Tokyo. Name them.'}]}, timeout=600).json()['message']['content'])"
+```
+
+answers with Gyoza Nishinaka, Gyoza Yokocho, Gyoza Shokunin — plausible, confident and
+absent from every search result. Through `/api/chat` the same question answers with Gyoza
+no Fukuho, Gyopao Gyoza Shinjuku and Kakekomi Gyoza, all of which appear verbatim in the
+snippets it was handed. The search results are doing the work.
+
+So the ceiling is the snippet. A restaurant's opening hours, its address, whether it closed
+last year: if that is not in the 500 characters DuckDuckGo returned, the model does not have
+it, and anything it says about it comes from its weights. Fetching the pages and passing
+their text is the change that would lift that ceiling, and it is not written.
+
+**SearXNG is not the search engine here.** `/api/health` probes it and the status strip
+shows whether the container is up, but `search_blocking` calls `ddgs`, which is DuckDuckGo.
+Nothing routes a query through SearXNG or reads a page through it. Pointing the tool at
+`SEARXNG_HOST` is a change to `search_blocking`, not configuration.
 
 ## Why the sources can be trusted
 
