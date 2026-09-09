@@ -21,9 +21,8 @@ flowchart LR
     end
 
     Ollama["Ollama — localhost:11434<br/>qwen3:1.7b, tool calling<br/>num_ctx 8192"]
-    DDG["DuckDuckGo<br/>title, URL, 500-char snippet"]
+    DDG["ddgs — 8 engines, rotated<br/>title, URL, 500-char snippet"]
     Pages["The result pages<br/>status code only, never read"]
-    Searx["SearXNG — localhost:8080<br/>health-probed, not the search engine"]
 
     App -->|"POST question"| Chat
     Chat -->|"NDJSON, one event per line"| App
@@ -36,12 +35,12 @@ flowchart LR
     Check --> Pages
     Chat --> Verify
 
-    Api -.->|"is it up"| Ollama
-    Api -.->|"is it up"| Searx
+    Api -.->|"is it up, is the model pulled"| Ollama
 ```
 
-The dashed edges are liveness probes, nothing more. `SEARXNG_HOST` is only ever asked
-whether it answers on `/healthz`; every search goes through `ddgs`, which is DuckDuckGo.
+The dashed edge is a liveness probe, nothing more. Ollama is the only thing running
+outside this repo: `ddgs` is a library inside the backend process, so there is no search
+service to be up or down.
 
 ## One request, end to end
 
@@ -52,7 +51,7 @@ sequenceDiagram
     participant P as Page
     participant A as run_agent
     participant M as Ollama
-    participant D as DuckDuckGo
+    participant D as ddgs
     participant W as Result pages
 
     U->>P: a question
@@ -112,9 +111,8 @@ flowchart LR
     end
 
     Ollama["Ollama — localhost:11434<br/>qwen3:1.7b、ツール呼び出し対応<br/>num_ctx 8192"]
-    DDG["DuckDuckGo<br/>タイトル、URL、500 文字のスニペット"]
+    DDG["ddgs — 8 エンジンを巡回<br/>タイトル、URL、500 文字のスニペット"]
     Pages["検索結果のページ<br/>ステータスコードのみ、本文は読まない"]
-    Searx["SearXNG — localhost:8080<br/>死活監視のみ、検索には未使用"]
 
     App -->|"質問を POST"| Chat
     Chat -->|"NDJSON、1 行 1 イベント"| App
@@ -127,12 +125,11 @@ flowchart LR
     Check --> Pages
     Chat --> Verify
 
-    Api -.->|"起動しているか"| Ollama
-    Api -.->|"起動しているか"| Searx
+    Api -.->|"起動しているか、モデルは取得済みか"| Ollama
 ```
 
-破線は死活監視だけを表す。`SEARXNG_HOST` には `/healthz` が応答するかしか尋ねていない。
-検索はすべて `ddgs`、つまり DuckDuckGo を通る。
+破線は死活監視だけを表す。このリポジトリの外で動くのは Ollama だけであり、`ddgs` は
+バックエンドのプロセス内のライブラリなので、起動を確認すべき検索サービスは存在しない。
 
 ## リクエスト 1 件の流れ
 
@@ -143,7 +140,7 @@ sequenceDiagram
     participant P as 画面
     participant A as run_agent
     participant M as Ollama
-    participant D as DuckDuckGo
+    participant D as ddgs
     participant W as 結果ページ
 
     U->>P: 質問

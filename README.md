@@ -1,7 +1,7 @@
 # Minimal local search agent
 
-FastAPI + Ollama tool calling + DuckDuckGo, with a React page in front. No Docker, no
-API keys.
+FastAPI + Ollama tool calling + web search, with a React page in front. No Docker, no
+API keys, nothing to run but Ollama.
 
 ## Layout
 
@@ -9,18 +9,16 @@ API keys.
 ARCHITECTURE.md       component and request-flow diagrams, English then Japanese
 backend/main.py       the whole agent: /api/chat, /api/health, one web_search tool
 backend/test_stream.py  self-check for the event stream, no Ollama and no network
-backend/.env          OLLAMA_HOST, OLLAMA_MODEL, SEARXNG_HOST; gitignored, copy .env.example
-.env                  SEARXNG_SECRET for Docker Compose, gitignored; copy .env.example
+backend/.env          OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_TIMEOUT; gitignored, copy .env.example
 frontend/App.jsx      the transcript, the composer, the stream reader
 frontend/components/health-strip.jsx  the up/down chips, the polling, the toast and the alarm
 frontend/lib/health.js  which up/down changes are worth announcing — the part with a test
-frontend/lib/history.js  the session URL log behind the SearXNG chip
+frontend/lib/history.js  the session URL log behind the search chip
 frontend/test-health.mjs, test-history.mjs  self-checks for both, no React and no browser
 frontend/components/ui/  shadcn components, generated; regenerate rather than edit
 frontend/main.jsx     mounts it; index.html is Vite's entry point
 agent.py              a multi-provider agent loop with none of its modules written
 __init__.py           the provider registry those modules would live in
-docker-compose.yml    SearXNG on :8080 — health-probed only; the search engine is ddgs
 ```
 
 Only `backend/` and `frontend/` run today. `agent.py` and `__init__.py` are a second
@@ -112,51 +110,6 @@ drift apart, so stay on pnpm or delete `pnpm-lock.yaml` first.
 Open http://localhost:5173 and ask something that needs fresh information, like
 "what changed in the latest FastAPI release".
 
-## SearXNG (optional)
-
-Nothing in `backend/main.py` calls it yet — the agent searches through `ddgs`. Start it
-only when you are ready to point the tool at a local engine.
-
-Docker Desktop must be running. From the repo root:
-
-```powershell
-copy .env.example .env
-python -c "import secrets; print(secrets.token_hex(32))"   # paste into SEARXNG_SECRET
-
-docker compose up -d
-```
-
-Compose reads the root `.env` for `SEARXNG_SECRET` and refuses to start if it is missing.
-
-```powershell
-docker compose ps                 # searxng should be running on 0.0.0.0:8080
-docker compose logs -f searxng    # ctrl-c to stop following
-```
-
-Open http://localhost:8080 to search by hand. The JSON API the agent would use is off by
-default — `searxng/settings.yml` inherits `use_default_settings: true` and the defaults are
-HTML only. Add a `search` block to that file:
-
-```yaml
-search:
-  formats:
-    - html
-    - json
-```
-
-Then restart and check:
-
-```powershell
-docker compose restart searxng
-curl.exe "http://localhost:8080/search?q=fastapi&format=json"
-```
-
-Stop it, keeping the config in `searxng/`:
-
-```powershell
-docker compose down
-```
-
 ## How the model decides to search
 
 It is the model's call, not the code's. Every request sends the `web_search` tool
@@ -216,14 +169,13 @@ curl.exe -N http://localhost:8000/api/chat -H "Content-Type: application/json" -
 
 ## Health
 
-The page cannot tell a stopped Ollama from a stopped container from a stopped backend —
-all three fail a question the same way. `/api/health` probes each one separately so the
-status strip in the header can name the one that broke:
+A stopped Ollama and a stopped backend fail a question the same way, and the page cannot
+tell them apart on its own. `/api/health` answers for the one thing that runs outside
+this repo, so the status strip in the header can name what broke:
 
 ```json
 {
-  "ollama":  {"up": true,  "detail": "qwen3:1.7b",  "url": "http://localhost:11434"},
-  "searxng": {"up": false, "detail": "All connection attempts failed", "url": "http://localhost:8080"}
+  "ollama": {"up": false, "detail": "All connection attempts failed", "url": "http://localhost:11434"}
 }
 ```
 
@@ -231,30 +183,28 @@ status strip in the header can name the one that broke:
 Ollama that has never pulled `OLLAMA_MODEL` counts as down — it cannot answer — and the
 detail carries the `ollama pull` that fixes it.
 
-The strip shows three chips, because the backend is the thing that probes the other two:
+The strip shows two chips, because the backend is the thing that probes the other:
 
 | Chip | Green when | Red means |
 | --- | --- | --- |
 | Backend | `/api/health` answers | uvicorn is not running, or CORS is refusing the page |
 | Model | Ollama answers and `OLLAMA_MODEL` is pulled | `ollama serve` is down, or the model was never pulled |
-| SearXNG | `$SEARXNG_HOST/healthz` answers | the container is stopped — optional, nothing calls it yet |
 
-With the backend red the other two go grey rather than red: their state is unknown, not
+With the backend red the Model chip goes grey rather than red: its state is unknown, not
 down.
 
-Hovering the SearXNG chip opens the session log: every page a search returned since the
-tab was opened, most recently seen first, deduplicated across questions and struck
-through when the link checker found it dead. `historyOf` in `frontend/lib/history.js`
-builds it from the turns already in React state — nothing extra is stored, and it resets
-on reload. The card says so itself, but worth repeating: those URLs come from
-DuckDuckGo. The chip is on them because it is the search chip, not because SearXNG
-returned any of them.
+Beside them sits a third chip that is not a probe: a magnifier and a count, because
+`ddgs` runs inside the backend and has nothing separate to be up or down. Hovering it
+opens the session log — every page a search returned since the tab was opened, most
+recently seen first, deduplicated across questions, struck through when the link checker
+found it dead. `historyOf` in `frontend/lib/history.js` builds it from the turns already
+in React state, so nothing extra is stored and it resets on reload.
 
 The page polls every 5 seconds and announces **changes only** — a toast plus a two-tone
 alarm when something that was up goes down, a quieter toast when it comes back. A service
-that was never up stays silent, which is what keeps the optional SearXNG container from
-nagging on every load. `transitions()` in `frontend/lib/health.js` is that rule, and
-`pnpm test` is its self-check.
+that was never up stays silent, so starting the page before Ollama does not alarm.
+`transitions()` in `frontend/lib/health.js` is that rule, and `pnpm test` is its
+self-check.
 
 Browsers refuse to start audio until the tab has been clicked or typed in, so the very
 first alarm on an untouched page is silent. The toast still appears.
@@ -287,10 +237,11 @@ last year: if that is not in the 500 characters DuckDuckGo returned, the model d
 it, and anything it says about it comes from its weights. Fetching the pages and passing
 their text is the change that would lift that ceiling, and it is not written.
 
-**SearXNG is not the search engine here.** `/api/health` probes it and the status strip
-shows whether the container is up, but `search_blocking` calls `ddgs`, which is DuckDuckGo.
-Nothing routes a query through SearXNG or reads a page through it. Pointing the tool at
-`SEARXNG_HOST` is a change to `search_blocking`, not configuration.
+**`ddgs` is not just DuckDuckGo.** Despite the name it is a metasearch client: version
+9.16 rotates over Brave, DuckDuckGo, Google, Grokipedia, Mojeek, Startpage, Wikipedia and
+Yahoo, and `backend="auto"` is the default. One engine rate-limiting you is therefore not
+the outage it would be against a single source. It is still an unofficial scraper of
+pages nobody promised to keep stable, and it breaks when they change.
 
 ## Why the sources can be trusted
 
@@ -367,19 +318,15 @@ another retrieved one flagged the blocks whose names had moved.
 
 ## Secrets
 
-Two `.env` files, both gitignored, both with a committed `.env.example` beside them:
+One gitignored `.env`, with a committed `.env.example` beside it:
 
 | File | Read by | Holds |
 | --- | --- | --- |
-| `backend/.env` | `uvicorn --env-file` | `OLLAMA_HOST`, `OLLAMA_MODEL`, `SEARXNG_HOST` |
-| `.env` | `docker compose` | `SEARXNG_SECRET` |
+| `backend/.env` | `uvicorn --env-file` | `OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT` |
 
-`searxng/settings.yml` is committed and must stay free of `secret_key`. SearXNG picks the
-value up from `SEARXNG_SECRET` instead, which Compose passes in. Generate one with:
-
-```powershell
-python -c "import secrets; print(secrets.token_hex(32))"
-```
+None of it is a secret today — it is host, model name and a timeout, all local. The file
+is gitignored anyway, so pointing `OLLAMA_HOST` at a private machine later does not need
+a second look at what git is tracking.
 
 ## Two things that will stop it working
 

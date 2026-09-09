@@ -212,7 +212,7 @@ with TestClient(main.app) as client:
 assert events[-1] == {"type": "error", "error": "ReadTimeout"}, events
 
 
-# --- health probes --------------------------------------------------------------------
+# --- health probe ---------------------------------------------------------------------
 
 import asyncio
 
@@ -243,26 +243,31 @@ class FakeClient:
 
 
 TAGS = f"{main.OLLAMA_HOST}/api/tags"
-HEALTHZ = f"{main.SEARXNG_HOST}/healthz"
 
-# The happy path: the service answers and the configured model is in the list.
-pulled = FakeClient({TAGS: FakeResponse({"models": [{"name": main.OLLAMA_MODEL}]})})
-assert asyncio.run(main.probe(pulled, TAGS, main.model_pulled)) == {
+
+def probe(answers):
+    return asyncio.run(main.check_ollama(FakeClient(answers)))
+
+
+# The happy path: Ollama answers and the configured model is in the list.
+assert probe({TAGS: FakeResponse({"models": [{"name": main.OLLAMA_MODEL}]})}) == {
     "up": True,
     "detail": main.OLLAMA_MODEL,
 }
 
-# Ollama is running but the model was never pulled — down, with the command that fixes it.
-empty = FakeClient({TAGS: FakeResponse({"models": []})})
-result = asyncio.run(main.probe(empty, TAGS, main.model_pulled))
+# Running, but the model was never pulled — down, with the command that fixes it.
+result = probe({TAGS: FakeResponse({"models": []})})
 assert result["up"] is False and "ollama pull" in result["detail"], result
 
+# Some other model is pulled: still down, and the detail must not claim otherwise.
+result = probe({TAGS: FakeResponse({"models": [{"name": "some-other-model"}]})})
+assert result["up"] is False and main.OLLAMA_MODEL in result["detail"], result
+
 # Nothing listening: the reason reaches the page rather than an empty string.
-result = asyncio.run(main.probe(FakeClient({}), HEALTHZ))
+result = probe({})
 assert result["up"] is False and result["detail"], result
 
 # A 5xx is down too, even though the connection itself succeeded.
-result = asyncio.run(main.probe(FakeClient({HEALTHZ: FakeResponse(status=502)}), HEALTHZ))
-assert result["up"] is False, result
+assert probe({TAGS: FakeResponse(status=502)})["up"] is False
 
 print("ok")
