@@ -324,7 +324,7 @@ async def chat(request: ChatRequest) -> StreamingResponse:
                 yield json.dumps(event) + "\n"
         except Exception as exc:
             # Headers are already sent, so a 500 is no longer possible: report in-band.
-            yield json.dumps({"type": "error", "error": str(exc)}) + "\n"
+            yield json.dumps({"type": "error", "error": str(exc) or exc.__class__.__name__}) + "\n"
 
     return StreamingResponse(lines(), media_type="application/x-ndjson")
 
