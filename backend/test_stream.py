@@ -78,6 +78,7 @@ assert events[-1] == {
     "answer": "forced",
     "unretrieved": [],
     "unsupported": [],
+    "ungrounded": [],
 }, events[-1]
 assert sum(event["type"] == "search_done" for event in events) == main.MAX_ITERATIONS
 
@@ -187,6 +188,34 @@ events, _ = collect(
     rows=NAMED_ROWS,
 )
 assert events[-1]["unsupported"] == [], events[-1]
+
+# --- names that were never retrieved ---------------------------------------------------
+
+# Every distinctive word of the name is in a snippet: it was retrieved, not remembered.
+events, _ = collect(
+    [TOOL_CALL, {"content": "1. **Dandadan** is worth the queue"}], rows=NAMED_ROWS
+)
+assert events[-1]["ungrounded"] == [], events[-1]
+
+# A name no snippet contains, cited against a real retrieved URL. `unretrieved` sees a
+# valid URL and says nothing; only the name check catches it.
+events, _ = collect(
+    [TOOL_CALL, {"content": "4. **Kikunoi Gyoza** https://a.example/x"}], rows=NAMED_ROWS
+)
+assert events[-1]["unretrieved"] == [], events[-1]
+assert events[-1]["ungrounded"] == ["Kikunoi Gyoza"], events[-1]
+
+# Bold field labels are how models format a list, not names of things.
+labels = "1. **Dandadan**\n   - **Location**: Shinjuku\n   - **Rating**: 4.5"
+events, _ = collect([TOOL_CALL, {"content": labels}], rows=NAMED_ROWS)
+assert events[-1]["ungrounded"] == [], events[-1]
+
+# One invention written two ways is one invention, reported at its longest.
+events, _ = collect(
+    [TOOL_CALL, {"content": "**Kikunoi Gyoza** is good. Kikunoi Gyoza opens late."}],
+    rows=NAMED_ROWS,
+)
+assert events[-1]["ungrounded"] == ["Kikunoi Gyoza"], events[-1]
 
 # A failure mid-stream is reported in-band: headers already went out with a 200.
 async def boom(client, messages, tools=None):
