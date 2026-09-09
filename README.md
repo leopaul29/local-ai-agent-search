@@ -143,7 +143,7 @@ rather than one JSON body at the end. The events:
 | `{"type": "thinking"}` | A round started; the model is deciding what to do |
 | `{"type": "search_start", "query"}` | The model called the tool; the search is running |
 | `{"type": "search_done", "query", "ms", "results", "duplicates", "dead"}` | Results are in, already filtered |
-| `{"type": "answer", "answer", "unretrieved", "unsupported"}` | Final text; the stream ends here |
+| `{"type": "answer", "answer", "unretrieved", "unsupported", "ungrounded"}` | Final text; the stream ends here |
 | `{"type": "error", "error"}` | Something failed mid-stream |
 
 `error` is in-band because the response headers left with a 200 as soon as the first event
@@ -306,10 +306,29 @@ Verified against the live model rather than in the abstract: four runs of the Sh
 gyoza question flagged nothing, and the same answers with every cited URL swapped for
 another retrieved one flagged the blocks whose names had moved.
 
+**A name that was never retrieved.** The bluntest failure, and the last one to be caught.
+The model writes a restaurant no snippet ever mentioned, then hangs a real retrieved URL
+off it. `unretrieved` sees a valid URL and says nothing. `unsupported_citations` catches it
+only if the block cites that URL directly.
+
+`ungrounded_names` asks the question underneath: is this name in the search results at all?
+Candidates are what a model actually writes names as — bold spans, and runs of two or more
+capitalised words — minus bold spans followed by a colon, which are field labels
+(`**Location**:`) rather than names. A candidate is reported when none of its distinctive
+words appear anywhere in any snippet. If the name is not in the results, it came from the
+training data, which on a small local model is years out of date.
+
+Run against eight real answers to the Shinjuku gyoza question: six clean, and two carrying
+`Kikunoi Gyoza` and `Nishijin Gyoza`, both invented, both written with a real retrieved URL
+beside them. That answer had `unretrieved: []` and one `unsupported` block — the URLs were
+genuine and the pairing check caught half of it. The name check caught both.
+
 ### What this still does not catch
 
-- A claim the snippet happens to share a word with. The check asks whether the source
+- A claim the snippet happens to share a word with. The checks ask whether the source
   mentions the thing, not whether it supports the sentence.
+- A single-word name that is also an ordinary word. It survives the distinctive-word filter
+  only if the snippets never use that word in any sense.
 - A page whose snippet names the restaurant while the page itself says something else.
   Only fetching and reading it would catch that, and nothing here reads pages.
 - A restaurant that closed last year with its page still up.

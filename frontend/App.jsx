@@ -55,6 +55,7 @@ const applyEvent = (turn, event) => {
         answer: event.answer,
         unretrieved: event.unretrieved,
         unsupported: event.unsupported,
+        ungrounded: event.ungrounded,
       };
     case "error":
       return { ...turn, status: null, error: event.error };
@@ -166,6 +167,13 @@ function Answer({ turn }) {
         <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs break-words text-destructive">
           {plural(turn.unretrieved.length, "link")} in this answer came from the model, not from a search
           result. Treat as invented: {turn.unretrieved.join(", ")}
+        </p>
+      )}
+
+      {turn.ungrounded?.length > 0 && (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs break-words text-destructive">
+          {plural(turn.ungrounded.length, "name")} in this answer appear in no search result at all:{" "}
+          {turn.ungrounded.join(", ")}. Not retrieved, so they come from the model&apos;s training data.
         </p>
       )}
 

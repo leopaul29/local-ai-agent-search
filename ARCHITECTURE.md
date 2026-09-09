@@ -17,7 +17,7 @@ flowchart LR
         Api["/api/health"]
         Search["search_blocking<br/>ddgs, in a worker thread"]
         Check["check_alive<br/>HEAD, then GET on 405"]
-        Verify["unretrieved_urls<br/>unsupported_citations"]
+        Verify["unretrieved_urls<br/>unsupported_citations<br/>ungrounded_names"]
     end
 
     Ollama["Ollama — localhost:11434<br/>qwen3:1.7b, tool calling<br/>num_ctx 8192"]
@@ -77,8 +77,8 @@ sequenceDiagram
     end
 
     Note over A: budget spent? one last call with no tools,<br/>which forces text instead of another search
-    Note over A: unretrieved_urls: URLs in the answer no search returned<br/>unsupported_citations: blocks whose cited snippet never names them
-    A-->>P: answer + unretrieved + unsupported
+    Note over A: unretrieved_urls: URLs in the answer no search returned<br/>unsupported_citations: blocks whose cited snippet never names them<br/>ungrounded_names: names no snippet contains at all
+    A-->>P: answer + unretrieved + unsupported + ungrounded
     P-->>U: markdown answer, source list, warnings
 ```
 
@@ -107,7 +107,7 @@ flowchart LR
         Api["/api/health"]
         Search["search_blocking<br/>ddgs、ワーカースレッド上"]
         Check["check_alive<br/>HEAD、405 なら GET"]
-        Verify["unretrieved_urls<br/>unsupported_citations"]
+        Verify["unretrieved_urls<br/>unsupported_citations<br/>ungrounded_names"]
     end
 
     Ollama["Ollama — localhost:11434<br/>qwen3:1.7b、ツール呼び出し対応<br/>num_ctx 8192"]
@@ -166,8 +166,8 @@ sequenceDiagram
     end
 
     Note over A: 回数を使い切ったら、ツールなしで最後に 1 回呼ぶ。<br/>再検索ではなく本文を書かせるため
-    Note over A: unretrieved_urls: どの検索も返していない URL<br/>unsupported_citations: 引用先のスニペットが名前に触れていない塊
-    A-->>P: answer + unretrieved + unsupported
+    Note over A: unretrieved_urls: どの検索も返していない URL<br/>unsupported_citations: 引用先のスニペットが名前に触れていない塊<br/>ungrounded_names: どのスニペットにも出てこない固有名
+    A-->>P: answer + unretrieved + unsupported + ungrounded
     P-->>U: Markdown の回答、出典一覧、警告
 ```
 

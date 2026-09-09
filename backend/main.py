@@ -33,6 +33,9 @@ DEAD_STATUSES = {404, 410}
 # Markdown wrapping is not part of the URL: models emit **bold** links and `code` ones.
 URL_IN_TEXT = re.compile(r"https?://[^\s)\]}>\"'`*]+")
 WORD = re.compile(r"\w{3,}", re.UNICODE)
+# How a model writes the name of a thing: in bold, or as consecutive capitalised words.
+BOLD = re.compile(r"\*\*(.+?)\*\*")
+CAPITALISED_RUN = re.compile(r"[A-Z][\w'-]*(?:\s+(?:no|de|of|the|[A-Z][\w'-]*))+")
 # Words this common across the retrieved snippets are the query itself coming back; they
 # cannot tell one source apart from another, so they prove no attribution.
 GENERIC_SHARE = 0.5
@@ -158,6 +161,49 @@ def blocks(text: str):
         yield "\n".join(current)
 
 
+def generic_words(sources: dict[str, str]) -> set[str]:
+    """Words carried by most of the snippets: the query echoing back, not evidence."""
+    frequency = Counter(word for text in sources.values() for word in words(text))
+    return {word for word, count in frequency.items() if count > len(sources) * GENERIC_SHARE}
+
+
+def ungrounded_names(answer: str, sources: dict[str, str]) -> list[str]:
+    """Names in the answer that no snippet contains anywhere.
+
+    Distinct from unsupported_citations, which asks whether a name matches the page it
+    cites. This asks the blunter question behind it: is the name in the search results at
+    all? A restaurant no snippet ever mentions was not retrieved, so it came out of the
+    model's training data, and on a local model that data is years old.
+
+    Candidates are what a model actually writes names as: bold spans, and runs of two or
+    more capitalised words. A candidate is reported only when none of its distinctive
+    words appear anywhere in the snippets, which leaves headings and stock phrases alone.
+    """
+    if not sources:
+        return []
+
+    generic = generic_words(sources)
+    corpus = set().union(*(words(text) for text in sources.values()))
+
+    candidates = []
+    for match in BOLD.finditer(answer):
+        # "**Location**: Shinjuku" is a field label, not the name of anything.
+        if answer[match.end() : match.end() + 2].lstrip().startswith(":"):
+            continue
+        candidates.append(match.group(1))
+    candidates += CAPITALISED_RUN.findall(answer)
+
+    found = []
+    for candidate in candidates:
+        name = " ".join(candidate.split()).strip("*_`:.,")
+        distinctive = words(name) - generic
+        if distinctive and not distinctive & corpus and name not in found:
+            found.append(name)
+
+    # "Kikunoi" and "Kikunoi Gyoza" are one invention; report the longer wording only.
+    return [name for name in found if not any(other != name and name in other for other in found)]
+
+
 def unsupported_citations(answer: str, sources: dict[str, str]) -> list[dict]:
     """Lines whose cited page never mentions what the line is about.
 
@@ -169,9 +215,7 @@ def unsupported_citations(answer: str, sources: dict[str, str]) -> list[dict]:
     if not sources:
         return []
 
-    frequency = Counter(word for text in sources.values() for word in words(text))
-    generic = {word for word, count in frequency.items() if count > len(sources) * GENERIC_SHARE}
-
+    generic = generic_words(sources)
     gaps = []
     for block in blocks(answer):
         cited = [url for url in map(normalize, URL_IN_TEXT.findall(block)) if url in sources]
@@ -245,6 +289,7 @@ async def run_agent(question: str):
                     "answer": answer,
                     "unretrieved": unretrieved_urls(answer, retrieved),
                     "unsupported": unsupported_citations(answer, retrieved),
+                    "ungrounded": ungrounded_names(answer, retrieved),
                 }
                 return
 
@@ -306,6 +351,7 @@ async def run_agent(question: str):
             "answer": answer,
             "unretrieved": unretrieved_urls(answer, retrieved),
             "unsupported": unsupported_citations(answer, retrieved),
+            "ungrounded": ungrounded_names(answer, retrieved),
         }
 
 
