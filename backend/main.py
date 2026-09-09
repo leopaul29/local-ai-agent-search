@@ -21,6 +21,9 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 SEARXNG_HOST = os.getenv("SEARXNG_HOST", "http://localhost:8080")
 MAX_ITERATIONS = 3
+# Generous: qwen3:1.7b answering from five snippets runs mostly on the CPU, and at 180
+# seconds two runs in five were cut off mid-answer and surfaced as a bare timeout.
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "600"))
 LINK_TIMEOUT = 6.0
 # Short: the page polls /api/health on a timer, and a hung probe is a down service as
 # far as the person watching the status strip is concerned.
@@ -216,7 +219,7 @@ async def ask_ollama(client: httpx.AsyncClient, messages: list[dict], tools: lis
             # The default context of 2048 silently truncates search results.
             "options": {"num_ctx": 8192},
         },
-        timeout=180.0,
+        timeout=OLLAMA_TIMEOUT,
     )
     response.raise_for_status()
     return response.json()["message"]
