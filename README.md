@@ -17,14 +17,7 @@ frontend/lib/history.js  the session URL log behind the search chip
 frontend/test-health.mjs, test-history.mjs  self-checks for both, no React and no browser
 frontend/components/ui/  shadcn components, generated; regenerate rather than edit
 frontend/main.jsx     mounts it; index.html is Vite's entry point
-agent.py              a multi-provider agent loop with none of its modules written
-__init__.py           the provider registry those modules would live in
 ```
-
-Only `backend/` and `frontend/` run today. `agent.py` and `__init__.py` are a second
-generation sketched before the first one was finished: they import `ollama_client`,
-`config`, `schemas` and four provider modules that do not exist. Treat them as notes,
-not as code.
 
 ## Run it
 
@@ -194,7 +187,7 @@ With the backend red the Model chip goes grey rather than red: its state is unkn
 down.
 
 Beside them sits a third chip that is not a probe: a magnifier and a count, because
-`ddgs` runs inside the backend and has nothing separate to be up or down. Hovering it
+`ddgs` runs inside the backend and has nothing separate to be up or down. Clicking it
 opens the session log — every page a search returned since the tab was opened, most
 recently seen first, deduplicated across questions, struck through when the link checker
 found it dead. `historyOf` in `frontend/lib/history.js` builds it from the turns already
