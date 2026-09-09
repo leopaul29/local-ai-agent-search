@@ -1,4 +1,19 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
+import { ArrowUpIcon, Loader2Icon } from "lucide-react";
+
+import { HealthStrip } from "@/components/health-strip";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
+import { Toaster } from "@/components/ui/sonner";
 
 const API = "http://localhost:8000";
 
@@ -18,12 +33,19 @@ const applyEvent = (turn, event) => {
         ...turn,
         searches: turn.searches.map((search) =>
           search.running && search.query === event.query
-            ? { query: event.query, ms: event.ms, results: event.results, running: false }
+            ? {
+                query: event.query,
+                ms: event.ms,
+                results: event.results,
+                duplicates: event.duplicates,
+                dead: event.dead,
+                running: false,
+              }
             : search,
         ),
       };
     case "answer":
-      return { ...turn, status: null, answer: event.answer };
+      return { ...turn, status: null, answer: event.answer, unretrieved: event.unretrieved };
     case "error":
       return { ...turn, status: null, error: event.error };
     default:
@@ -31,14 +53,19 @@ const applyEvent = (turn, event) => {
   }
 };
 
-/** Every result the model saw, deduplicated by URL, in the order they arrived. */
-const sourcesOf = (turn) => {
-  const byUrl = new Map();
-  for (const search of turn.searches ?? [])
-    for (const result of search.results ?? [])
-      if (result.url && !byUrl.has(result.url)) byUrl.set(result.url, result);
-  return [...byUrl.values()];
-};
+/** Only pages that actually answered: these are the ones the model was given. */
+const sourcesOf = (turn) =>
+  (turn.searches ?? []).flatMap((search) => (search.results ?? []).filter((result) => !result.dead));
+
+/** What the search returned but the model never saw, with the reason. */
+const droppedOf = (turn) =>
+  (turn.searches ?? []).reduce(
+    (total, search) => ({
+      duplicates: total.duplicates + (search.duplicates ?? 0),
+      dead: total.dead + (search.dead ?? 0),
+    }),
+    { duplicates: 0, dead: 0 },
+  );
 
 /** DuckDuckGo occasionally returns something URL() will not parse. */
 const hostOf = (url) => {
@@ -49,6 +76,113 @@ const hostOf = (url) => {
   }
 };
 
+const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+function Search({ search }) {
+  return (
+    <details className="rounded-lg border bg-card px-3 py-2 text-sm">
+      <summary className="cursor-pointer list-none text-muted-foreground marker:content-none">
+        <span className="inline-flex items-center gap-2">
+          {search.running && <Loader2Icon className="size-3.5 animate-spin" />}
+          {search.running
+            ? `Searching for “${search.query}”…`
+            : `Searched for “${search.query}” — ${plural(search.results.length, "new result")} in ${search.ms} ms` +
+              (search.duplicates ? `, ${search.duplicates} already seen` : "") +
+              (search.dead ? `, ${plural(search.dead, "dead link")}` : "")}
+        </span>
+      </summary>
+
+      <div className="mt-2 flex flex-col gap-2 border-t pt-2">
+        {search.results?.map((result) => (
+          <p key={result.url} className="flex flex-col gap-0.5">
+            <a
+              href={result.url}
+              target="_blank"
+              rel="noreferrer"
+              className={
+                result.dead
+                  ? "text-muted-foreground line-through underline-offset-4 hover:underline"
+                  : "underline-offset-4 hover:underline"
+              }
+            >
+              {result.title || result.url}
+            </a>
+            <span className={result.dead ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+              {result.dead
+                ? `Unreachable (${result.status ?? "no response"}) — not shown to the model`
+                : result.snippet.slice(0, 180)}
+            </span>
+          </p>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function Answer({ turn }) {
+  const sources = sourcesOf(turn);
+  const dropped = droppedOf(turn);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {turn.status && (
+        <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2Icon className="size-3.5 animate-spin" />
+          {turn.status}…
+        </p>
+      )}
+
+      {turn.searches?.map((search, index) => (
+        <Search key={index} search={search} />
+      ))}
+
+      {turn.answer && <div className="text-sm whitespace-pre-wrap">{turn.answer}</div>}
+
+      {turn.unretrieved?.length > 0 && (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs break-words text-destructive">
+          {plural(turn.unretrieved.length, "link")} in this answer came from the model, not from a search
+          result. Treat as invented: {turn.unretrieved.join(", ")}
+        </p>
+      )}
+
+      {turn.answer && sources.length > 0 && (
+        <ol className="flex list-none flex-col gap-1 text-sm">
+          {sources.map((source, index) => (
+            <li key={source.url} className="flex items-baseline gap-2">
+              <span className="text-xs tabular-nums text-muted-foreground">{index + 1}.</span>
+              <a
+                href={source.url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline-offset-4 hover:underline"
+              >
+                {source.title || source.url}
+              </a>
+              <Badge variant="secondary" className="font-normal">
+                {hostOf(source.url)}
+                {source.status && source.status >= 400 ? ` · ${source.status}` : ""}
+              </Badge>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {turn.answer && (dropped.duplicates > 0 || dropped.dead > 0) && (
+        <p className="text-xs text-muted-foreground">
+          Dropped before the model saw them: {plural(dropped.duplicates, "duplicate")},{" "}
+          {plural(dropped.dead, "dead link")}.
+        </p>
+      )}
+
+      {turn.error && (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {turn.error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState([]);
@@ -58,7 +192,8 @@ export default function App() {
   const patchLast = (fn) =>
     setTurns((previous) => previous.map((turn, index) => (index === previous.length - 1 ? fn(turn) : turn)));
 
-  const ask = async () => {
+  const ask = async (event) => {
+    event.preventDefault();
     const text = question.trim();
     if (!text || busy) return;
 
@@ -100,63 +235,54 @@ export default function App() {
   };
 
   return (
-    <main className="page">
-      <h1>Local search agent</h1>
+    <div className="mx-auto flex h-dvh max-w-3xl flex-col gap-3 px-4 pb-4">
+      <header className="flex items-start justify-between gap-4 border-b py-3">
+        <h1 className="text-sm font-semibold">Local search agent</h1>
+        <HealthStrip api={API} />
+      </header>
 
-      <div className="composer">
-        <input
+      <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollPreviousItemPeek={64}>
+        <MessageScroller className="flex-1">
+          <MessageScrollerViewport>
+            <MessageScrollerContent aria-busy={busy} className="gap-4 pb-4">
+              {turns.length === 0 && (
+                <p className="m-auto max-w-sm text-balance text-center text-sm text-muted-foreground">
+                  Ask something that needs fresh information. The model decides on its own whether to
+                  search — watch the steps as they happen.
+                </p>
+              )}
+
+              {turns.map((turn, index) => (
+                <Fragment key={index}>
+                  {/* Anchored on the question so the turn you asked stays pinned as the answer grows. */}
+                  <MessageScrollerItem messageId={`${index}-question`} scrollAnchor>
+                    <p className="ms-auto w-fit max-w-[85%] rounded-2xl bg-secondary px-3.5 py-2 text-sm">
+                      {turn.question}
+                    </p>
+                  </MessageScrollerItem>
+                  <MessageScrollerItem messageId={`${index}-answer`}>
+                    <Answer turn={turn} />
+                  </MessageScrollerItem>
+                </Fragment>
+              ))}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton />
+        </MessageScroller>
+      </MessageScrollerProvider>
+
+      <form className="flex gap-2" onSubmit={ask}>
+        <Input
           value={question}
           placeholder="Ask something that needs fresh information"
           onChange={(event) => setQuestion(event.target.value)}
-          onKeyDown={(event) => event.key === "Enter" && ask()}
         />
-        <button onClick={ask} disabled={busy || !question.trim()}>
-          {busy ? "Working" : "Ask"}
-        </button>
-      </div>
+        <Button type="submit" size="icon" disabled={busy || !question.trim()} aria-label="Ask">
+          {busy ? <Loader2Icon className="animate-spin" /> : <ArrowUpIcon />}
+        </Button>
+      </form>
 
-      {turns.map((turn, index) => (
-        <article key={index} className="turn">
-          <p className="question">{turn.question}</p>
-
-          {turn.status && <p className="status">{turn.status}…</p>}
-
-          {turn.searches?.map((search, searchIndex) => (
-            <details key={searchIndex} className={search.running ? "search running" : "search"}>
-              <summary>
-                {search.running
-                  ? `Searching for “${search.query}”…`
-                  : `Searched for “${search.query}” — ${search.results.length} results in ${search.ms} ms`}
-              </summary>
-              {search.results?.map((result) => (
-                <p key={result.url} className="result">
-                  <a href={result.url} target="_blank" rel="noreferrer">
-                    {result.title || result.url}
-                  </a>
-                  <span>{result.snippet.slice(0, 180)}</span>
-                </p>
-              ))}
-            </details>
-          ))}
-
-          {turn.answer && <div className="answer">{turn.answer}</div>}
-
-          {turn.answer && sourcesOf(turn).length > 0 && (
-            <ol className="sources">
-              {sourcesOf(turn).map((source) => (
-                <li key={source.url}>
-                  <a href={source.url} target="_blank" rel="noreferrer">
-                    {source.title || source.url}
-                  </a>
-                  <span>{hostOf(source.url)}</span>
-                </li>
-              ))}
-            </ol>
-          )}
-
-          {turn.error && <p className="error">{turn.error}</p>}
-        </article>
-      ))}
-    </main>
+      <Toaster position="top-right" richColors closeButton />
+    </div>
   );
 }

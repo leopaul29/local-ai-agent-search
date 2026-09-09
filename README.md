@@ -170,8 +170,8 @@ rather than one JSON body at the end. The events:
 | --- | --- |
 | `{"type": "thinking"}` | A round started; the model is deciding what to do |
 | `{"type": "search_start", "query"}` | The model called the tool; the search is running |
-| `{"type": "search_done", "query", "ms", "results"}` | Results are in |
-| `{"type": "answer", "answer"}` | Final text; the stream ends here |
+| `{"type": "search_done", "query", "ms", "results", "duplicates", "dead"}` | Results are in, already filtered |
+| `{"type": "answer", "answer", "unretrieved"}` | Final text; the stream ends here |
 | `{"type": "error", "error"}` | Something failed mid-stream |
 
 `error` is in-band because the response headers left with a 200 as soon as the first event
@@ -189,6 +189,45 @@ Watch the raw stream from the terminal:
 ```powershell
 curl.exe -N http://localhost:8000/api/chat -H "Content-Type: application/json" -d "{\"message\":\"what changed in the latest FastAPI release\"}"
 ```
+
+## Why the sources can be trusted
+
+Three separate problems, three separate fixes, all in `run_agent`.
+
+**The same page kept coming back.** Two searches in one turn overlap, so results three to
+five of the second search were already results one and two of the first. A `retrieved` set
+of normalized URLs now spans the whole turn: a page the model has already been given is
+never sent again. `duplicates` in the `search_done` event counts what was dropped.
+
+**Dead links.** Every new URL is checked before the model sees it — `HEAD`, falling back to
+a streamed `GET` for sites that answer 405, with a 6 second budget and all of a search's
+URLs checked in parallel. Only 404, 410 and "could not be reached at all" count as dead;
+403 and 429 mean the site refuses to talk to a bot, which says nothing about whether the
+page exists. Dead results are cut from what goes to the model and kept in the event with
+their status code, so the page can show them struck through with the reason.
+
+**Hallucinated URLs.** A search result is real by construction — it came from DuckDuckGo,
+not from the model. A URL in the *answer* is a different matter: the model writes that
+text, and a plausible-looking `https://…/shinjuku-gyoza` is exactly the kind of thing it
+invents. So every URL in the answer is matched against the set of URLs the searches
+actually returned, and the ones with no match come back in `unretrieved`. The page prints
+them under a warning. An empty `unretrieved` means every link in the answer is one the
+search engine returned.
+
+That last check is the honest answer to "how do I know it is not hallucinating": you do not
+have to trust the model at all, because the citation list under the answer is built from
+the search results, not from the text the model wrote.
+
+The system prompt also tells the model to copy URLs character for character and never write
+one it has not seen. That helps, and it is not evidence — `unretrieved` is.
+
+### What this still does not catch
+
+- A page that is alive but does not say what the model claims. Only fetching and reading it
+  would catch that, and nothing here reads pages, only snippets.
+- A restaurant that closed last year with its page still up.
+- URLs the model mangles into another *live* page. Rare, and it would show as a link that
+  works but does not match the name next to it.
 
 ## Secrets
 
@@ -232,9 +271,10 @@ any error.
 - No token streaming. Progress events stream, but the answer arrives as one block: Ollama
   is called with `"stream": False`. Flip that and forward the chunks to type it out live.
 - One search engine. DuckDuckGo through `ddgs` is unofficial and rate-limits under load.
+- No page fetching, so link checking stops at the status code: alive is not the same as
+  relevant, and a snippet is all the model ever reads.
 - No conversation history — each question starts fresh. Keep a message list in React state
   and send it whole to add follow-ups.
-- No page fetching. The model only sees snippets, never full pages.
 
 ## Next step
 
