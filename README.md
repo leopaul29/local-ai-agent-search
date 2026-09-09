@@ -8,9 +8,13 @@ API keys.
 ```
 backend/main.py       the whole agent: /api/chat, /api/health, one web_search tool
 backend/test_stream.py  self-check for the event stream, no Ollama and no network
-backend/.env          OLLAMA_HOST and OLLAMA_MODEL, gitignored; copy .env.example
+backend/.env          OLLAMA_HOST, OLLAMA_MODEL, SEARXNG_HOST; gitignored, copy .env.example
 .env                  SEARXNG_SECRET for Docker Compose, gitignored; copy .env.example
-frontend/App.jsx      the whole UI
+frontend/App.jsx      the transcript, the composer, the stream reader
+frontend/components/health-strip.jsx  the up/down chips, the polling, the toast and the alarm
+frontend/lib/health.js  which up/down changes are worth announcing — the part with a test
+frontend/test-health.mjs  self-check for that, no React and no browser
+frontend/components/ui/  shadcn components, generated; regenerate rather than edit
 frontend/main.jsx     mounts it; index.html is Vite's entry point
 agent.py              a multi-provider agent loop with none of its modules written
 __init__.py           the provider registry those modules would live in
@@ -67,11 +71,13 @@ code, and `.env` is gitignored.
 On macOS or Linux the same steps are `source .venv/bin/activate`, then
 `uvicorn main:app --reload --port 8000 --env-file .env`.
 
-Check the model is reachable before touching the frontend:
+Check both dependencies are reachable before touching the frontend:
 
 ```bash
 curl localhost:8000/api/health
 ```
+
+See [Health](#health) for what it answers and what each failure means.
 
 And check the agent loop itself without touching Ollama or the network:
 
@@ -85,6 +91,17 @@ Frontend, in a second terminal:
 cd frontend
 pnpm install
 pnpm dev
+```
+
+The page is Tailwind v4 plus [shadcn](https://ui.shadcn.com) on the Base UI registry, which
+is why `@shadcn/react` pins React 19. `pnpm install` covers all of it; `components.json`
+records the settings the generator used, so `pnpm dlx shadcn@latest add <name>` keeps
+matching what is already there.
+
+One check runs without a browser:
+
+```bash
+pnpm test
 ```
 
 The lockfile is pnpm's. Running `npm install` here writes a second lockfile and the two
@@ -190,6 +207,43 @@ Watch the raw stream from the terminal:
 curl.exe -N http://localhost:8000/api/chat -H "Content-Type: application/json" -d "{\"message\":\"what changed in the latest FastAPI release\"}"
 ```
 
+## Health
+
+The page cannot tell a stopped Ollama from a stopped container from a stopped backend —
+all three fail a question the same way. `/api/health` probes each one separately so the
+status strip in the header can name the one that broke:
+
+```json
+{
+  "ollama":  {"up": true,  "detail": "qwen3:1.7b",  "url": "http://localhost:11434"},
+  "searxng": {"up": false, "detail": "All connection attempts failed", "url": "http://localhost:8080"}
+}
+```
+
+`detail` is the model name when Ollama is healthy, and the reason otherwise. A reachable
+Ollama that has never pulled `OLLAMA_MODEL` counts as down — it cannot answer — and the
+detail carries the `ollama pull` that fixes it.
+
+The strip shows three chips, because the backend is the thing that probes the other two:
+
+| Chip | Green when | Red means |
+| --- | --- | --- |
+| Backend | `/api/health` answers | uvicorn is not running, or CORS is refusing the page |
+| Model | Ollama answers and `OLLAMA_MODEL` is pulled | `ollama serve` is down, or the model was never pulled |
+| SearXNG | `$SEARXNG_HOST/healthz` answers | the container is stopped — optional, nothing calls it yet |
+
+With the backend red the other two go grey rather than red: their state is unknown, not
+down.
+
+The page polls every 5 seconds and announces **changes only** — a toast plus a two-tone
+alarm when something that was up goes down, a quieter toast when it comes back. A service
+that was never up stays silent, which is what keeps the optional SearXNG container from
+nagging on every load. `transitions()` in `frontend/lib/health.js` is that rule, and
+`pnpm test` is its self-check.
+
+Browsers refuse to start audio until the tab has been clicked or typed in, so the very
+first alarm on an untouched page is silent. The toast still appears.
+
 ## Why the sources can be trusted
 
 Three separate problems, three separate fixes, all in `run_agent`.
@@ -235,7 +289,7 @@ Two `.env` files, both gitignored, both with a committed `.env.example` beside t
 
 | File | Read by | Holds |
 | --- | --- | --- |
-| `backend/.env` | `uvicorn --env-file` | `OLLAMA_HOST`, `OLLAMA_MODEL` |
+| `backend/.env` | `uvicorn --env-file` | `OLLAMA_HOST`, `OLLAMA_MODEL`, `SEARXNG_HOST` |
 | `.env` | `docker compose` | `SEARXNG_SECRET` |
 
 `searxng/settings.yml` is committed and must stay free of `secret_key`. SearXNG picks the

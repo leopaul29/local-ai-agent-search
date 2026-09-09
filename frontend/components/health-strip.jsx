@@ -2,20 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "cn";
 import { toast } from "sonner";
 
+import { SERVICES, transitions } from "@/lib/health";
 import { Badge } from "@/components/ui/badge";
 
 const POLL_MS = 5000;
 
-// The backend is first because it is the one that probes the other two: when it is down,
-// nothing is known about them.
-const SERVICES = [
-  { key: "backend", label: "Backend" },
-  { key: "ollama", label: "Model" },
-  { key: "searxng", label: "SearXNG" },
-];
-
 // One context for the page. Browsers cap how many can exist at once, and a suspended one
-// is cheap, so it is kept rather than opened and closed per alarm.
+// costs nothing, so it is kept rather than opened and closed per alarm.
 let audio;
 
 /** Two short descending tones. No audio file, so nothing to load before it can fire. */
@@ -49,31 +42,12 @@ const alarm = () => {
   }
 };
 
-/** Announce only what changed, so a service that was never up never nags. */
-const announce = (before, after) => {
-  // With the backend unreachable the other two are unknown, not down. One toast about the
-  // backend beats three about everything downstream of it.
-  const watched = after.backend?.up ? SERVICES : SERVICES.slice(0, 1);
-
-  for (const { key, label } of watched) {
-    const was = before[key]?.up;
-    const now = after[key]?.up;
-    if (was === now) continue;
-
-    if (was === true) {
-      alarm();
-      toast.error(`${label} went down`, {
-        description: after[key]?.detail ?? "no answer",
-        duration: Infinity,
-      });
-    } else if (was === false && now === true) {
-      toast.success(`${label} is back`);
-    }
-  }
-};
-
 const dotClass = (up) =>
-  up === true ? "bg-emerald-500" : up === false ? "bg-destructive animate-pulse" : "bg-muted-foreground/40";
+  up === true
+    ? "bg-emerald-500"
+    : up === false
+      ? "bg-destructive animate-pulse"
+      : "bg-muted-foreground/40";
 
 /** Live up/down for every service a question depends on, polled on a timer. */
 export function HealthStrip({ api }) {
@@ -94,7 +68,18 @@ export function HealthStrip({ api }) {
       }
       if (cancelled) return;
 
-      announce(previous.current, next);
+      for (const change of transitions(previous.current, next)) {
+        if (change.down) {
+          alarm();
+          toast.error(`${change.label} went down`, {
+            description: change.detail,
+            duration: Infinity,
+          });
+        } else {
+          toast.success(`${change.label} is back`);
+        }
+      }
+
       previous.current = next;
       setHealth(next);
     };
@@ -127,7 +112,11 @@ export function HealthStrip({ api }) {
 
       {/* Spelled out as well as coloured: the point is to see which one broke without hovering. */}
       {broken.map(({ key, label }) => (
-        <p key={key} className="max-w-md truncate text-end text-xs text-destructive" title={health[key].detail}>
+        <p
+          key={key}
+          className="max-w-md truncate text-end text-xs text-destructive"
+          title={health[key].detail}
+        >
           {label}: {health[key].detail}
         </p>
       ))}
