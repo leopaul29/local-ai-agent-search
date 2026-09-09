@@ -1,6 +1,7 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowUpIcon, Loader2Icon } from "lucide-react";
 import Markdown from "react-markdown";
+import { Toaster } from "sonner";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
@@ -9,15 +10,6 @@ import { HealthStrip } from "@/components/health-strip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  MessageScroller,
-  MessageScrollerButton,
-  MessageScrollerContent,
-  MessageScrollerItem,
-  MessageScrollerProvider,
-  MessageScrollerViewport,
-} from "@/components/ui/message-scroller";
-import { Toaster } from "@/components/ui/sonner";
 
 const API = "http://localhost:8000";
 
@@ -91,7 +83,7 @@ const MARKDOWN_PLUGINS = [remarkGfm, remarkBreaks];
  * built out of search results cannot inject markup into the page.
  */
 const AnswerText = ({ children }) => (
-  <div className="prose prose-sm prose-neutral max-w-none dark:prose-invert prose-pre:bg-muted prose-pre:text-foreground prose-code:before:content-none prose-code:after:content-none">
+  <div className="prose prose-sm prose-neutral max-w-none prose-pre:bg-muted prose-pre:text-foreground prose-code:before:content-none prose-code:after:content-none">
     <Markdown
       remarkPlugins={MARKDOWN_PLUGINS}
       components={{
@@ -233,6 +225,21 @@ export default function App() {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState([]);
   const [busy, setBusy] = useState(false);
+  const transcript = useRef(null);
+  // Whether new content should scroll itself into view. Read from the scroll position
+  // rather than forced: a reader who has scrolled up to an earlier turn must not be
+  // yanked back to the bottom by the next event of a stream still running.
+  const following = useRef(true);
+
+  const onScroll = (event) => {
+    const box = event.currentTarget;
+    following.current = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  };
+
+  useEffect(() => {
+    const box = transcript.current;
+    if (box && following.current) box.scrollTop = box.scrollHeight;
+  }, [turns]);
 
   // The streaming turn is always the last one: the composer is disabled until it ends.
   const patchLast = (fn) =>
@@ -287,35 +294,28 @@ export default function App() {
         <HealthStrip api={API} history={historyOf(turns)} />
       </header>
 
-      <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollPreviousItemPeek={64}>
-        <MessageScroller className="flex-1">
-          <MessageScrollerViewport>
-            <MessageScrollerContent aria-busy={busy} className="gap-4 pb-4">
-              {turns.length === 0 && (
-                <p className="m-auto max-w-sm text-balance text-center text-sm text-muted-foreground">
-                  Ask something that needs fresh information. The model decides on its own whether to
-                  search — watch the steps as they happen.
-                </p>
-              )}
+      <div
+        ref={transcript}
+        onScroll={onScroll}
+        aria-busy={busy}
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain pb-4"
+      >
+        {turns.length === 0 && (
+          <p className="m-auto max-w-sm text-balance text-center text-sm text-muted-foreground">
+            Ask something that needs fresh information. The model decides on its own whether to
+            search — watch the steps as they happen.
+          </p>
+        )}
 
-              {turns.map((turn, index) => (
-                <Fragment key={index}>
-                  {/* Anchored on the question so the turn you asked stays pinned as the answer grows. */}
-                  <MessageScrollerItem messageId={`${index}-question`} scrollAnchor>
-                    <p className="ms-auto w-fit max-w-[85%] rounded-2xl bg-secondary px-3.5 py-2 text-sm">
-                      {turn.question}
-                    </p>
-                  </MessageScrollerItem>
-                  <MessageScrollerItem messageId={`${index}-answer`}>
-                    <Answer turn={turn} />
-                  </MessageScrollerItem>
-                </Fragment>
-              ))}
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerButton />
-        </MessageScroller>
-      </MessageScrollerProvider>
+        {turns.map((turn, index) => (
+          <Fragment key={index}>
+            <p className="ms-auto w-fit max-w-[85%] rounded-2xl bg-secondary px-3.5 py-2 text-sm">
+              {turn.question}
+            </p>
+            <Answer turn={turn} />
+          </Fragment>
+        ))}
+      </div>
 
       <form className="flex gap-2" onSubmit={ask}>
         <Input
