@@ -5,6 +5,7 @@ Run:  .venv\Scripts\python.exe test_stream.py
 
 import json
 
+import httpx
 import main
 from fastapi.testclient import TestClient
 
@@ -198,6 +199,17 @@ with TestClient(main.app) as client:
         events = [json.loads(line) for line in response.iter_lines() if line.strip()]
 assert events[-1] == {"type": "error", "error": "ollama is down"}, events
 
+
+# A timeout carries no message at all, and an empty string tells the reader nothing.
+async def silent(client, messages, tools=None):
+    raise httpx.ReadTimeout("")
+
+
+main.ask_ollama = silent
+with TestClient(main.app) as client:
+    with client.stream("POST", "/api/chat", json={"message": "hi"}) as response:
+        events = [json.loads(line) for line in response.iter_lines() if line.strip()]
+assert events[-1] == {"type": "error", "error": "ReadTimeout"}, events
 
 
 # --- health probes --------------------------------------------------------------------
