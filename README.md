@@ -218,7 +218,8 @@ A tool call comes back as a `role: "tool"` message appended to `messages`, and t
 call to Ollama carries the whole conversation, so the results are in the context the answer
 is written from. That part is real. What is in them is five rows of *title, URL and the
 first 500 characters of the search-result snippet* — about 2.4 KB, roughly 600 tokens, per
-search. Nothing fetches a page. The model never reads a single one of the pages it cites.
+search, plus the headings of each page that let itself be fetched. Nothing reads the body
+of a page; the headings are all that is taken from it.
 
 Whether it uses them is not a matter of opinion, it is testable. The same question asked
 with no search at all:
@@ -232,10 +233,46 @@ absent from every search result. Through `/api/chat` the same question answers w
 no Fukuho, Gyopao Gyoza Shinjuku and Kakekomi Gyoza, all of which appear verbatim in the
 snippets it was handed. The search results are doing the work.
 
-So the ceiling is the snippet. A restaurant's opening hours, its address, whether it closed
-last year: if that is not in the 500 characters DuckDuckGo returned, the model does not have
-it, and anything it says about it comes from its weights. Fetching the pages and passing
-their text is the change that would lift that ceiling, and it is not written.
+### Why the headings are fetched too
+
+The snippet is not the page, and it is not markup either: it is the site's own blurb, the
+meta description or a passage the engine picked. On the five results for the Shinjuku gyoza
+question, the top one reads
+
+> Shinjuku is one of Tokyo's greatest food neighborhoods, and when it comes to gyoza —
+> those irresistible pan-fried dumplings with crispy golden bottoms and juicy fillings —
+> this district delivers like few others.
+
+and names no restaurant at all. Its `h2`s are the answer:
+
+> 1. Gyoza no Fukuho (餃子の福包) | 2. Harajuku Gyoza-ro Shinjuku | 3. Kabukicho gyoza crawl
+> | 4. Chao Chao Gyoza Shinjuku
+
+On a "best X in Y" article the headings *are* the list. So `fetch_page` does the link check
+and the reading in one streamed GET: the status line says whether the link is alive, the
+body — read to at most `PAGE_BYTES` and no further — gives `page_headings` the `h1`, `h2`
+and `h3` of `//main` or `//article`, deduplicated, capped at 12 and 600 characters.
+
+Three decisions came out of measuring rather than guessing:
+
+- **Headings are added to the snippet, never substituted for it.** One of the five results
+  has headings that are only section titles — *Popular Gyoza Restaurants in Shinjuku* — while
+  its snippet is the one carrying Nikujiru Gyoza no Dandadan, Rouben Gyozakan and Ichimi Rei
+  Rei. Replacing would have lost exactly the names that were working.
+- **`li` and `strong` are not included.** They triple the volume and bring breadcrumbs,
+  share counts and every heading a second time.
+- **A site that refuses the fetch keeps its snippet.** One of the five answers 403 to a bot;
+  a refusal is not a dead link and not an empty result.
+
+The effect, over three runs of the same question: `Chao Chao Gyoza Shinjuku` and `Harajuku
+Gyoza-ro Shinjuku` appear in answers, and appear in no snippet — they exist only in the
+headings, so before this they could not be said at all. The snippet-only names still come
+through. Context grew from about 2.4 KB to between 1.9 and 3.3 KB a search, and search time
+did not measurably rise: one GET replaces a HEAD that was often followed by a GET anyway.
+
+So the ceiling is now the headings. A restaurant's opening hours, its address, whether it
+closed last year: if that is in the body text, the model still does not have it, and
+anything it says about it comes from its weights.
 
 **`ddgs` is not just DuckDuckGo.** Despite the name it is a metasearch client: version
 9.16 rotates over Brave, DuckDuckGo, Google, Grokipedia, Mojeek, Startpage, Wikipedia and
@@ -329,8 +366,8 @@ genuine and the pairing check caught half of it. The name check caught both.
   mentions the thing, not whether it supports the sentence.
 - A single-word name that is also an ordinary word. It survives the distinctive-word filter
   only if the snippets never use that word in any sense.
-- A page whose snippet names the restaurant while the page itself says something else.
-  Only fetching and reading it would catch that, and nothing here reads pages.
+- A page whose snippet or heading names the restaurant while the body says something else.
+  Only reading the body would catch that, and only headings are read.
 - A restaurant that closed last year with its page still up.
 - URLs the model mangles into another *live* page. Rare, and it would show as a link that
   works but does not match the name next to it.
@@ -373,8 +410,8 @@ any error.
 - No token streaming. Progress events stream, but the answer arrives as one block: Ollama
   is called with `"stream": False`. Flip that and forward the chunks to type it out live.
 - One search engine. DuckDuckGo through `ddgs` is unofficial and rate-limits under load.
-- No page fetching, so link checking stops at the status code: alive is not the same as
-  relevant, and a snippet is all the model ever reads.
+- No body text. Headings and snippets only, so alive is still not the same as relevant and
+  a claim about opening hours has nothing behind it.
 - No conversation history — each question starts fresh. Keep a message list in React state
   and send it whole to add follow-ups.
 

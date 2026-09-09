@@ -16,13 +16,13 @@ flowchart LR
         Chat["/api/chat<br/>run_agent"]
         Api["/api/health"]
         Search["search_blocking<br/>ddgs, in a worker thread"]
-        Check["check_alive<br/>HEAD, then GET on 405"]
+        Check["fetch_page<br/>one streamed GET,<br/>status + page_headings"]
         Verify["unretrieved_urls<br/>unsupported_citations<br/>ungrounded_names"]
     end
 
     Ollama["Ollama — localhost:11434<br/>qwen3:1.7b, tool calling<br/>num_ctx 8192"]
     DDG["ddgs — 8 engines, rotated<br/>title, URL, 500-char snippet"]
-    Pages["The result pages<br/>status code only, never read"]
+    Pages["The result pages<br/>status code and h1/h2/h3, never the body"]
 
     App -->|"POST question"| Chat
     Chat -->|"NDJSON, one event per line"| App
@@ -68,8 +68,8 @@ sequenceDiagram
             A->>D: query
             D-->>A: 5 rows, title + URL + snippet
             Note over A: drop URLs already retrieved this turn
-            A->>W: HEAD each new URL, in parallel
-            W-->>A: status code
+            A->>W: GET each new URL, in parallel
+            W-->>A: status code + headings
             Note over A: 404, 410 and unreachable are dead.<br/>403 and 429 are bot blocks, kept
             A-->>P: search_done + results, duplicates, dead
             A->>M: tool result: reachable rows only
@@ -106,13 +106,13 @@ flowchart LR
         Chat["/api/chat<br/>run_agent"]
         Api["/api/health"]
         Search["search_blocking<br/>ddgs、ワーカースレッド上"]
-        Check["check_alive<br/>HEAD、405 なら GET"]
+        Check["fetch_page<br/>ストリーミング GET 1 回、<br/>ステータス + page_headings"]
         Verify["unretrieved_urls<br/>unsupported_citations<br/>ungrounded_names"]
     end
 
     Ollama["Ollama — localhost:11434<br/>qwen3:1.7b、ツール呼び出し対応<br/>num_ctx 8192"]
     DDG["ddgs — 8 エンジンを巡回<br/>タイトル、URL、500 文字のスニペット"]
-    Pages["検索結果のページ<br/>ステータスコードのみ、本文は読まない"]
+    Pages["検索結果のページ<br/>ステータスコードと h1/h2/h3、本文は読まない"]
 
     App -->|"質問を POST"| Chat
     Chat -->|"NDJSON、1 行 1 イベント"| App
@@ -157,8 +157,8 @@ sequenceDiagram
             A->>D: 検索語
             D-->>A: 5 件、タイトル + URL + スニペット
             Note over A: このターンで取得済みの URL は捨てる
-            A->>W: 新しい URL を並列に HEAD
-            W-->>A: ステータスコード
+            A->>W: 新しい URL を並列に GET
+            W-->>A: ステータスコード + 見出し
             Note over A: 404、410、到達不能はリンク切れ扱い。<br/>403 と 429 はボット拒否なので残す
             A-->>P: search_done + results、duplicates、dead
             A->>M: ツール結果: 到達できた行だけ

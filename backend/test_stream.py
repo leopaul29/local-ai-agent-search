@@ -10,10 +10,10 @@ import main
 from fastapi.testclient import TestClient
 
 
-def collect(replies, question="anything", rows=None, statuses=None):
+def collect(replies, question="anything", rows=None, statuses=None, headings=None):
     """Drive the endpoint with a scripted sequence of Ollama replies and search rows.
 
-    Nothing here touches the network: both Ollama and the link checker are replaced.
+    Nothing here touches the network: both Ollama and the page fetcher are replaced.
     """
     scripted = list(replies)
 
@@ -27,10 +27,10 @@ def collect(replies, question="anything", rows=None, statuses=None):
         dict(row) for row in (rows or [{"title": "T", "url": "https://example.com", "snippet": "S"}])
     ]
 
-    async def fake_check(client, url):
-        return (statuses or {}).get(url, 200)
+    async def fake_fetch(client, url):
+        return (statuses or {}).get(url, 200), (headings or {}).get(url, "")
 
-    main.check_alive = fake_check
+    main.fetch_page = fake_fetch
 
     with TestClient(main.app) as client:
         with client.stream("POST", "/api/chat", json={"message": question}) as response:
@@ -188,6 +188,44 @@ events, _ = collect(
     rows=NAMED_ROWS,
 )
 assert events[-1]["unsupported"] == [], events[-1]
+
+# --- page headings ---------------------------------------------------------------------
+
+# The headings reach the model alongside the snippet, and a heading-only name counts as
+# retrieved: the model was shown it, so it did not have to remember it.
+events, sent = collect(
+    [TOOL_CALL, {"content": "**Chao Chao Gyoza** is worth it"}],
+    rows=NAMED_ROWS,
+    headings={"https://a.example/x": "1. Gyoza no Fukuho | 2. Chao Chao Gyoza"},
+)
+payload = tool_payload(sent)
+assert payload[0]["headings"] == "1. Gyoza no Fukuho | 2. Chao Chao Gyoza", payload
+assert events[-1]["ungrounded"] == [], events[-1]
+
+# A page that gives no headings sends no empty field to the model.
+events, sent = collect([TOOL_CALL, {"content": "done"}], rows=NAMED_ROWS)
+assert "headings" not in tool_payload(sent)[0], tool_payload(sent)
+
+# Headings are parsed out of the article, not the navigation around it, and a heading the
+# page repeats is listed once.
+markup = """
+<html><body>
+  <nav><h2>Latest articles</h2></nav>
+  <article>
+    <h1>Best gyoza in Shinjuku</h1>
+    <h2>1. Gyoza no Fukuho</h2>
+    <h3>What to order</h3>
+    <h2>1. Gyoza no Fukuho</h2>
+  </article>
+  <footer><h2>Newsletter</h2></footer>
+</body></html>
+"""
+found = main.page_headings(markup)
+assert found == "Best gyoza in Shinjuku | 1. Gyoza no Fukuho | What to order", found
+
+# Markup cut off mid-download still parses; a page with nothing usable yields nothing.
+assert main.page_headings("<html><body><article><h1>Half a pa") == "Half a pa"
+assert main.page_headings("") == ""
 
 # --- names that were never retrieved ---------------------------------------------------
 
