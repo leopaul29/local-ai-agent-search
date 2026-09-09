@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 
 import httpx
 from ddgs import DDGS
@@ -29,6 +30,15 @@ HEALTH_TIMEOUT = 4.0
 DEAD_STATUSES = {404, 410}
 # Markdown wrapping is not part of the URL: models emit **bold** links and `code` ones.
 URL_IN_TEXT = re.compile(r"https?://[^\s)\]}>\"'`*]+")
+WORD = re.compile(r"\w{3,}", re.UNICODE)
+# Words this common across the retrieved snippets are the query itself coming back; they
+# cannot tell one source apart from another, so they prove no attribution.
+GENERIC_SHARE = 0.5
+STOPWORDS = frozenset(
+    "and are but for from has have here how its not the this that they was were what "
+    "when where which who will with you your can also more most best top some any all "
+    "one two three four five six seven eight nine ten".split()
+)
 
 SYSTEM_PROMPT = (
     "You are a research assistant with web access. "
@@ -36,7 +46,9 @@ SYSTEM_PROMPT = (
     "answer directly otherwise. "
     "Cite only URLs that appeared verbatim in a search result, copied character for "
     "character. Never write a URL you have not seen in a result, not even a plausible "
-    "one: if you have no source for a claim, say so instead."
+    "one: if you have no source for a claim, say so instead. "
+    "Put each URL on the same line as the thing it supports, and only cite a result whose "
+    "title or snippet actually names that thing."
 )
 
 TOOLS = [
@@ -112,10 +124,63 @@ def is_dead(status: int | None) -> bool:
     return status is None or status in DEAD_STATUSES
 
 
-def unretrieved_urls(answer: str, retrieved: set[str]) -> list[str]:
+def unretrieved_urls(answer: str, sources: dict[str, str]) -> list[str]:
     """URLs the answer states that no search ever returned — the model wrote them itself."""
     cited = {normalize(url) for url in URL_IN_TEXT.findall(answer)}
-    return sorted(cited - retrieved)
+    return sorted(cited - sources.keys())
+
+
+def words(text: str) -> set[str]:
+    return {word for word in WORD.findall(text.lower()) if word not in STOPWORDS}
+
+
+def blocks(text: str):
+    """Split an answer into list items and paragraphs.
+
+    Models write the name of a thing on one line and its link on an indented one below, so
+    a link has to be judged against the whole item, not against the line it sits on. A
+    blank line or a line starting at column zero opens a new block; anything indented
+    continues the one above.
+    """
+    # ponytail: indentation is the only cue used. An answer that puts a name and its URL
+    # in two unindented lines reads as two blocks and the URL looks unsupported.
+    current = []
+    for line in text.splitlines():
+        if not line.strip() or (current and not line[:1].isspace()):
+            if current:
+                yield "\n".join(current)
+            current = []
+        if line.strip():
+            current.append(line)
+    if current:
+        yield "\n".join(current)
+
+
+def unsupported_citations(answer: str, sources: dict[str, str]) -> list[dict]:
+    """Lines whose cited page never mentions what the line is about.
+
+    The model saw nothing of a page but its title and snippet, so a name appearing in
+    neither cannot have come from that page: the pairing is the model's own invention even
+    though the URL is real. Words shared by most of the snippets are the query echoing
+    back and attribute nothing, so only the rarer ones are asked for.
+    """
+    if not sources:
+        return []
+
+    frequency = Counter(word for text in sources.values() for word in words(text))
+    generic = {word for word, count in frequency.items() if count > len(sources) * GENERIC_SHARE}
+
+    gaps = []
+    for block in blocks(answer):
+        cited = [url for url in map(normalize, URL_IN_TEXT.findall(block)) if url in sources]
+        if not cited:
+            continue
+
+        claim = words(URL_IN_TEXT.sub(" ", block)) - generic
+        supported = set().union(*(words(sources[url]) for url in cited))
+        if claim and not claim & supported:
+            gaps.append({"claim": " ".join(block.split())[:160], "urls": cited})
+    return gaps
 
 
 def model_pulled(response: httpx.Response) -> str:
@@ -163,10 +228,11 @@ async def run_agent(question: str):
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": question},
     ]
-    # Every URL any search has returned this turn, normalized. Two purposes: the model
-    # never sees the same page twice, and a URL in the answer that is missing here was
-    # invented rather than retrieved.
-    retrieved: set[str] = set()
+    # Every URL any search has returned this turn: normalized URL to the only text the
+    # model ever saw for it. Three purposes: the model never sees the same page twice, a
+    # URL in the answer that is missing here was invented rather than retrieved, and a
+    # claim can be checked against the snippet it is hung on.
+    retrieved: dict[str, str] = {}
 
     async with httpx.AsyncClient() as client:
         for _ in range(MAX_ITERATIONS):
@@ -180,6 +246,7 @@ async def run_agent(question: str):
                     "type": "answer",
                     "answer": answer,
                     "unretrieved": unretrieved_urls(answer, retrieved),
+                    "unsupported": unsupported_citations(answer, retrieved),
                 }
                 return
 
@@ -198,7 +265,7 @@ async def run_agent(question: str):
                 for row in rows:
                     key = normalize(row["url"])
                     if row["url"] and key not in retrieved:
-                        retrieved.add(key)
+                        retrieved[key] = f"{row['title']} {row['snippet']}"
                         fresh.append(row)
 
                 statuses = await asyncio.gather(
@@ -240,6 +307,7 @@ async def run_agent(question: str):
             "type": "answer",
             "answer": answer,
             "unretrieved": unretrieved_urls(answer, retrieved),
+            "unsupported": unsupported_citations(answer, retrieved),
         }
 
 

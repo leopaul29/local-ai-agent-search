@@ -72,7 +72,12 @@ assert events[1]["query"] == "x", events
 
 # Tool budget exhausted: the loop still ends on an answer, never on a dangling search.
 events, _ = collect([TOOL_CALL] * main.MAX_ITERATIONS + [{"content": "forced"}])
-assert events[-1] == {"type": "answer", "answer": "forced", "unretrieved": []}, events[-1]
+assert events[-1] == {
+    "type": "answer",
+    "answer": "forced",
+    "unretrieved": [],
+    "unsupported": [],
+}, events[-1]
 assert sum(event["type"] == "search_done" for event in events) == main.MAX_ITERATIONS
 
 
@@ -130,6 +135,57 @@ assert events[-1]["unretrieved"] == [], events[-1]
 # With no search at all, every URL in the answer is the model's own.
 events, _ = collect([{"content": "go to https://nowhere.example"}])
 assert events[-1]["unretrieved"] == ["https://nowhere.example"], events[-1]
+
+# --- claims hung on the wrong source ---------------------------------------------------
+
+NAMED_ROWS = [
+    {"title": "Dandadan", "url": "https://a.example/x", "snippet": "Nikujiru Gyoza no Dandadan, juicy gyoza in Shinjuku"},
+    {"title": "Osaka Ohsho", "url": "https://b.example/y", "snippet": "Osaka Ohsho, steamed gyoza in Shinjuku"},
+    {"title": "Guide", "url": "https://c.example/z", "snippet": "The best gyoza restaurants in Shinjuku, Tokyo"},
+]
+
+# The name is in the snippet of the page it cites: nothing to report.
+events, _ = collect(
+    [TOOL_CALL, {"content": "1. **Dandadan** https://a.example/x"}], rows=NAMED_ROWS
+)
+assert events[-1]["unsupported"] == [], events[-1]
+
+# Same name, wrong link. The URL is real, so `unretrieved` stays empty and only the
+# attribution check catches it.
+events, _ = collect(
+    [TOOL_CALL, {"content": "1. **Dandadan** https://b.example/y"}], rows=NAMED_ROWS
+)
+assert events[-1]["unretrieved"] == [], events[-1]
+assert [gap["urls"] for gap in events[-1]["unsupported"]] == [["https://b.example/y"]], events[-1]
+
+# A line carrying only words every snippet shares attributes nothing either way, so it
+# must not be flagged.
+events, _ = collect(
+    [TOOL_CALL, {"content": "Best gyoza in Shinjuku: https://c.example/z"}], rows=NAMED_ROWS
+)
+assert events[-1]["unsupported"] == [], events[-1]
+
+# A bare URL on its own line, as in a trailing source list, claims nothing.
+events, _ = collect([TOOL_CALL, {"content": "Sources:\nhttps://b.example/y"}], rows=NAMED_ROWS)
+assert events[-1]["unsupported"] == [], events[-1]
+
+# The name on the item line, the link on an indented one below it: one claim, not two.
+# Judged line by line, the "Source" line names nothing and would be flagged.
+item = "1. **Dandadan**\n   - **Source**: [Link](https://a.example/x)"
+events, _ = collect([TOOL_CALL, {"content": item}], rows=NAMED_ROWS)
+assert events[-1]["unsupported"] == [], events[-1]
+
+# Same shape, wrong link: the block check still catches it.
+item = "1. **Dandadan**\n   - **Source**: [Link](https://b.example/y)"
+events, _ = collect([TOOL_CALL, {"content": item}], rows=NAMED_ROWS)
+assert [gap["urls"] for gap in events[-1]["unsupported"]] == [["https://b.example/y"]], events[-1]
+
+# Two links on one line: one of them naming the claim is enough.
+events, _ = collect(
+    [TOOL_CALL, {"content": "**Dandadan** https://b.example/y https://a.example/x"}],
+    rows=NAMED_ROWS,
+)
+assert events[-1]["unsupported"] == [], events[-1]
 
 # A failure mid-stream is reported in-band: headers already went out with a 200.
 async def boom(client, messages, tools=None):
