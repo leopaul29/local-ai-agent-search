@@ -1,5 +1,8 @@
 import { Fragment, useState } from "react";
 import { ArrowUpIcon, Loader2Icon } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 
 import { HealthStrip } from "@/components/health-strip";
 import { Badge } from "@/components/ui/badge";
@@ -78,6 +81,29 @@ const hostOf = (url) => {
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+// gfm covers tables, strikethrough and bare URLs — answers end in a citation list of bare
+// URLs, and without it they stay unclickable text. breaks keeps a single newline a line
+// break, which is what small models write instead of a blank line.
+const MARKDOWN_PLUGINS = [remarkGfm, remarkBreaks];
+
+/** The model writes markdown. Show it as markdown rather than as its source.
+ *
+ * react-markdown renders no raw HTML unless a rehype plugin puts it back, so an answer
+ * built out of search results cannot inject markup into the page.
+ */
+const AnswerText = ({ children }) => (
+  <div className="prose prose-sm prose-neutral max-w-none dark:prose-invert prose-pre:bg-muted prose-pre:text-foreground prose-code:before:content-none prose-code:after:content-none">
+    <Markdown
+      remarkPlugins={MARKDOWN_PLUGINS}
+      components={{
+        a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+      }}
+    >
+      {children}
+    </Markdown>
+  </div>
+);
+
 function Search({ search }) {
   return (
     <details className="rounded-lg border bg-card px-3 py-2 text-sm">
@@ -136,7 +162,7 @@ function Answer({ turn }) {
         <Search key={index} search={search} />
       ))}
 
-      {turn.answer && <div className="text-sm whitespace-pre-wrap">{turn.answer}</div>}
+      {turn.answer && <AnswerText>{turn.answer}</AnswerText>}
 
       {turn.unretrieved?.length > 0 && (
         <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs break-words text-destructive">
