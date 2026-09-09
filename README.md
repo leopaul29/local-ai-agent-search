@@ -188,7 +188,7 @@ rather than one JSON body at the end. The events:
 | `{"type": "thinking"}` | A round started; the model is deciding what to do |
 | `{"type": "search_start", "query"}` | The model called the tool; the search is running |
 | `{"type": "search_done", "query", "ms", "results", "duplicates", "dead"}` | Results are in, already filtered |
-| `{"type": "answer", "answer", "unretrieved"}` | Final text; the stream ends here |
+| `{"type": "answer", "answer", "unretrieved", "unsupported"}` | Final text; the stream ends here |
 | `{"type": "error", "error"}` | Something failed mid-stream |
 
 `error` is in-band because the response headers left with a 200 as soon as the first event
@@ -280,10 +280,44 @@ the search results, not from the text the model wrote.
 The system prompt also tells the model to copy URLs character for character and never write
 one it has not seen. That helps, and it is not evidence — `unretrieved` is.
 
+**Right link, wrong thing.** A URL can be real, alive and retrieved and still be hung on
+the wrong claim: the answer names a restaurant and cites a page that is about a different
+one. `unretrieved` cannot see this, because the URL passes every test it applies.
+
+What makes this checkable is that the model never saw the page. It saw a title and a
+snippet, nothing else. So a name that appears in neither cannot have come from that page —
+the pairing is the model's own, whatever the link is. `unsupported_citations` splits the
+answer into markdown blocks, and for each block that cites a retrieved URL asks whether any
+distinctive word of the block appears in that URL's title or snippet.
+
+Distinctive is the load-bearing word. In an answer about gyoza in Shinjuku, *gyoza*,
+*shinjuku* and *tokyo* are in every snippet and so attribute nothing; the name of the
+restaurant is in one. Words appearing in more than half the snippets are therefore dropped
+before the comparison, which leaves the names. A block whose remaining words are all
+generic — a heading, a trailing source list — is never flagged, because it claims nothing.
+
+Blocks rather than lines, because models write the name on one line and the link on an
+indented one under it:
+
+```
+2. **Gyopao Gyoza Shinjuku**
+   - **Highlights**: ranked first in Shinjuku 3 Chome
+   - **Source**: [Link](https://…)
+```
+
+Line by line, the `Source` line names nothing and every answer in this shape gets flagged.
+A blank line or a line starting at column zero opens a block; indentation continues it.
+
+Verified against the live model rather than in the abstract: four runs of the Shinjuku
+gyoza question flagged nothing, and the same answers with every cited URL swapped for
+another retrieved one flagged the blocks whose names had moved.
+
 ### What this still does not catch
 
-- A page that is alive but does not say what the model claims. Only fetching and reading it
-  would catch that, and nothing here reads pages, only snippets.
+- A claim the snippet happens to share a word with. The check asks whether the source
+  mentions the thing, not whether it supports the sentence.
+- A page whose snippet names the restaurant while the page itself says something else.
+  Only fetching and reading it would catch that, and nothing here reads pages.
 - A restaurant that closed last year with its page still up.
 - URLs the model mangles into another *live* page. Rare, and it would show as a link that
   works but does not match the name next to it.

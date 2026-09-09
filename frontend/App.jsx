@@ -48,7 +48,13 @@ const applyEvent = (turn, event) => {
         ),
       };
     case "answer":
-      return { ...turn, status: null, answer: event.answer, unretrieved: event.unretrieved };
+      return {
+        ...turn,
+        status: null,
+        answer: event.answer,
+        unretrieved: event.unretrieved,
+        unsupported: event.unsupported,
+      };
     case "error":
       return { ...turn, status: null, error: event.error };
     default:
@@ -169,6 +175,20 @@ function Answer({ turn }) {
           {plural(turn.unretrieved.length, "link")} in this answer came from the model, not from a search
           result. Treat as invented: {turn.unretrieved.join(", ")}
         </p>
+      )}
+
+      {turn.unsupported?.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs">
+          <span className="text-muted-foreground">
+            {plural(turn.unsupported.length, "line")} cite a real page whose title and snippet never
+            mention it. The link exists; the pairing is the model&apos;s own.
+          </span>
+          {turn.unsupported.map((gap) => (
+            <p key={gap.claim} className="break-words">
+              <span className="text-foreground">{gap.claim}</span>
+            </p>
+          ))}
+        </div>
       )}
 
       {turn.answer && sources.length > 0 && (
